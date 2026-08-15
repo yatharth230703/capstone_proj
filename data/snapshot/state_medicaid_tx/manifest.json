@@ -1,0 +1,23 @@
+{
+  "source_id": "state_medicaid_tx",
+  "dataset_name": "Texas HHS-OIG Exclusions List",
+  "original_publisher": "Texas Health and Human Services - Office of Inspector General (HHS-OIG)",
+  "access_provider": "Texas Health and Human Services - Office of Inspector General (HHS-OIG)",
+  "source_url": "https://oig.hhs.texas.gov/exclusions",
+  "license_or_terms": "public domain (state government work)",
+  "snapshot_date": "2026-08-06",
+  "retrieved_at": "2026-08-06T16:09:59.065912Z",
+  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema_version": "state-medicaid-v1",
+  "coverage": {
+    "jurisdiction": "TX",
+    "exclusion_authority": "state_medicaid"
+  },
+  "freshness_status": "unknown",
+  "known_limitations": [
+    "npi is always null for this source; auto-link is prohibited for any match lacking an exact identifier (CLAUDE.md Amendment 1)",
+    "state exclusion is a SECONDARY label set — do not pool with federal LEIE/DOJ into one precision number (CLAUDE.md Amendment 1)",
+    "blocked by source-side bot protection (HTTP client): Client error '403 Forbidden' for url 'https://oig.hhs.texas.gov/exclusions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403; requires Playwright MCP (plan M7), not yet wired"
+  ],
+  "row_count": 0
+}

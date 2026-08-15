@@ -1,0 +1,18 @@
+{
+  "source_id": "synthetic_exclusions",
+  "dataset_name": "Synthetic Scenario Exclusions",
+  "original_publisher": "Project Specter (generated)",
+  "access_provider": "ingest/synthetic.py",
+  "source_url": "generated:local",
+  "license_or_terms": "n/a (synthetic)",
+  "snapshot_date": "2026-08-06",
+  "retrieved_at": "2026-08-06T16:10:16.327104Z",
+  "checksum_sha256": "647d307a103d49756e9e123b6a9691a00011a15fd858ededfbc66a9c2a699215",
+  "schema_version": "1.0.0",
+  "coverage": {
+    "scenarios": "S05, S06, S10"
+  },
+  "freshness_status": "current",
+  "known_limitations": [],
+  "row_count": 4
+}

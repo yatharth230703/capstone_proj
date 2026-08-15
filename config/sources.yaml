@@ -1,0 +1,71 @@
+# Source registry (plan §5.2, CLAUDE.md Amendment 1). Every URL a connector
+# hardcodes is recorded here too, per Amendment 1: "Do NOT hardcode a URL
+# without also recording it in config/sources.yaml." Government sources move
+# their download links; this file is the place an operator checks first when
+# a connector starts failing.
+version: "1.0.0"
+
+sources:
+  nppes:
+    dataset_name: "NPPES NPI Registry"
+    source_url: "https://npiregistry.cms.hhs.gov/api/"
+    format: json
+    access: live_http
+    notes: >
+      No taxonomy-code filter on the API; queried per (state, NUCC
+      classification group) and filtered client-side to taxonomy_prefix.
+      See src/specter/ingest/nppes.py.
+
+  leie:
+    dataset_name: "HHS OIG List of Excluded Individuals/Entities (LEIE)"
+    source_url: "https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv"
+    format: csv
+    access: live_http
+    notes: "Single national CSV, ~80k rows, no state pre-filter."
+
+  doj:
+    dataset_name: "DOJ Press Releases (healthcare-fraud filtered)"
+    source_url: "https://www.justice.gov/news/rss?type=press_release"
+    format: rss
+    access: live_http
+    notes: >
+      RSS feed only, verified working. justice.gov/news's own search UI is
+      Akamai-protected (JS challenge, confirmed via direct fetch); the feed
+      ignores topic/keyword query params and only covers a shallow recent
+      window. Deep archive coverage requires Playwright MCP (plan M7).
+
+  state_medicaid_fl:
+    dataset_name: "AHCA Medicaid Sanctioned/Terminated Provider List"
+    source_url: "https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity"
+    format: unknown
+    access: blocked_needs_playwright
+    jurisdiction: FL
+    notes: >
+      Verified HTTP 403 (Cloudflare) even with realistic browser headers.
+      Needs Playwright MCP (plan M7). Real column layout unknown until then.
+
+  state_medicaid_tx:
+    dataset_name: "Texas HHS-OIG Exclusions List"
+    source_url: "https://oig.hhs.texas.gov/exclusions"
+    format: unknown
+    access: blocked_needs_playwright
+    jurisdiction: TX
+    notes: >
+      Verified HTTP 403. The older oig.hhsc.state.tx.us domain times out
+      entirely. Needs Playwright MCP (plan M7).
+
+  state_medicaid_ca:
+    dataset_name: "DHCS Medi-Cal Suspended & Ineligible Provider (S&I) List"
+    source_url: "https://data.chhs.ca.gov/api/3/action/package_show?id=8f70e05d-baa5-4296-a5ab-36318d530670"
+    format: csv
+    access: live_http
+    jurisdiction: CA
+    notes: >
+      Resolved via the CKAN package_show API (dataset_id
+      8f70e05d-baa5-4296-a5ab-36318d530670, resource_id
+      48630a37-b5ba-4d3d-af54-e82b30e658a0) rather than the dated CSV
+      filename directly, since the filename changes monthly but the IDs
+      don't. No NPI column; "Provider Number" mixes Medi-Cal IDs with
+      occasional NPI-shaped strings that are not reliably distinguishable —
+      npi is left null rather than guessed (hard rule 2: no fabricated
+      identifiers).

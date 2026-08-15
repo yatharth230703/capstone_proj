@@ -1,0 +1,251 @@
+"""Agent-foundation tests. All offline — no LLM call is made here.
+
+The live path is covered by `scripts/15_smoke_data_quality.py`, which is run
+by hand because it costs money. What is asserted here is everything that can
+break silently: the cache boundary, the tool bindings, and the strict-mode
+constraints Azure imposes on output schemas.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from google.adk.tools.function_tool import FunctionTool
+from neo4j import Driver
+
+from specter.agents._base import (
+    AgentOutputError,
+    AgentRuntime,
+    _parse_output,
+    build_agent,
+)
+from specter.agents.data_quality import build_evidence
+from specter.core.contracts import DataQualityReport, ScreeningThresholds
+from specter.llm.ledger import CostLedger
+from specter.llm.prompt_compiler import PromptCompiler
+from specter.llm.response_cache import ResponseCache
+from specter.llm.router import ModelRouter, load_policy
+from specter.settings import get_settings
+from specter.tools.bindings import build_tool_bindings
+from specter.tools.signal_tools import load_thresholds
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def thresholds() -> ScreeningThresholds:
+    return load_thresholds(_REPO_ROOT / "config" / "screening.yaml")
+
+
+@pytest.fixture
+def bindings(thresholds: ScreeningThresholds) -> list[Any]:
+    # The driver is only touched inside each tool body, so binding without a
+    # live Neo4j is safe for every signature/schema assertion below.
+    return build_tool_bindings(cast(Driver, None), thresholds, _REPO_ROOT / "data" / "evidence")
+
+
+@pytest.fixture
+def runtime(tmp_path: Path) -> AgentRuntime:
+    settings = get_settings()
+    policy = load_policy(_REPO_ROOT / "config" / "models.yaml", settings)
+    return AgentRuntime(
+        router=ModelRouter(policy, "default", settings=settings),
+        compiler=PromptCompiler(
+            blocks_dir=_REPO_ROOT / "prompts" / "blocks",
+            graph_version="test",
+            policy_version=policy.version,
+        ),
+        cache=ResponseCache(cast(Any, None), enabled=False),
+        ledger=CostLedger(tmp_path / "ledger.sqlite"),
+        run_id="test",
+        prompts_dir=_REPO_ROOT / "prompts" / "agents",
+    )
+
+
+# --- the cache boundary -------------------------------------------------
+
+
+def test_static_instruction_is_exactly_the_compiled_prefix(runtime: AgentRuntime) -> None:
+    """B0-B3 must reach the model verbatim. ADK puts `static_instruction`
+    straight into `config.system_instruction`, so any drift here is drift in
+    the cached prefix.
+    """
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    assert agent.static_instruction == runtime.compiler.system_prefix
+
+
+def test_agent_instruction_stays_below_the_boundary(runtime: AgentRuntime) -> None:
+    """The per-agent brief must NOT be part of the shared prefix — otherwise
+    every agent gets its own cache entry instead of sharing one.
+    """
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    assert "Role: Data Quality Agent" in agent.instruction
+    assert "Role: Data Quality Agent" not in cast(str, agent.static_instruction)
+
+
+def test_agent_name_must_be_python_identifier(runtime: AgentRuntime) -> None:
+    with pytest.raises(ValueError, match="valid Python identifier"):
+        build_agent(
+            name="data-quality",
+            task_class="assess_source_quality",
+            instruction_file="data_quality.md",
+            tools=[],
+            output_schema=DataQualityReport,
+            runtime=runtime,
+        )
+
+
+def test_unknown_task_class_raises(runtime: AgentRuntime) -> None:
+    with pytest.raises(ValueError, match="unknown task_class"):
+        build_agent(
+            name="nonexistent",
+            task_class="not_a_real_task_class",
+            instruction_file="data_quality.md",
+            tools=[],
+            output_schema=DataQualityReport,
+            runtime=runtime,
+        )
+
+
+# --- output-schema strictness ------------------------------------------
+
+
+def _walk_properties(schema: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    for name, definition in schema.get("properties", {}).items():
+        found.append((name, definition))
+    for definition in schema.get("$defs", {}).values():
+        found.extend(_walk_properties(definition))
+    return found
+
+
+def test_agent_output_schemas_carry_no_defaults() -> None:
+    """Azure strict mode (`lite_llm.py:2321` sets `strict: True`) rejects any
+    property with a `default`. A default here is a 400 at run time, not a
+    validation error at build time — so it has to be caught in tests.
+    """
+    schema = DataQualityReport.model_json_schema()
+    offenders = [name for name, defn in _walk_properties(schema) if "default" in defn]
+    assert offenders == [], f"fields with defaults break Azure strict mode: {offenders}"
+
+
+def test_agent_output_schemas_forbid_additional_properties() -> None:
+    schema = DataQualityReport.model_json_schema()
+    assert schema.get("additionalProperties") is False
+
+
+def test_parse_output_rejects_non_json() -> None:
+    with pytest.raises(AgentOutputError, match="not valid JSON"):
+        _parse_output("agent", "I'm afraid I can't do that", DataQualityReport)
+
+
+def test_parse_output_rejects_schema_violation() -> None:
+    with pytest.raises(AgentOutputError, match="did not validate"):
+        _parse_output("agent", json.dumps({"verdict": "banana"}), DataQualityReport)
+
+
+def test_parse_output_accepts_valid_payload() -> None:
+    payload = {
+        "verdict": "warn",
+        "per_source": [
+            {
+                "source_id": "nppes",
+                "verdict": "pass",
+                "freshness_status": "current",
+                "findings": ["row count matches manifest"],
+                "recommended_action": "proceed",
+            }
+        ],
+        "blocking_reasons": [],
+        "recommended_action": "proceed with limitations recorded",
+    }
+    parsed = _parse_output("agent", json.dumps(payload), DataQualityReport)
+    assert parsed["verdict"] == "warn"
+    assert parsed["per_source"][0]["source_id"] == "nppes"
+
+
+# --- tool bindings ------------------------------------------------------
+
+
+def test_bindings_hide_infrastructure_from_the_model(bindings: list[Any]) -> None:
+    """No model-facing tool may expose a driver, thresholds, or a filesystem
+    path — a model that can pass a threshold is a model choosing a number.
+    """
+    import inspect
+
+    forbidden = {"driver", "thresholds", "evidence_dir"}
+    for tool in bindings:
+        params = set(inspect.signature(tool).parameters)
+        assert not (params & forbidden), f"{tool.__name__} leaks {params & forbidden}"
+
+
+def test_every_binding_has_a_docstring(bindings: list[Any]) -> None:
+    """The docstring *is* the tool description the model sees
+    (`function_tool.py:99`). An undocumented tool is an unusable one.
+    """
+    missing = [tool.__name__ for tool in bindings if not (tool.__doc__ or "").strip()]
+    assert missing == []
+
+
+def test_binding_names_are_unique(bindings: list[Any]) -> None:
+    names = [tool.__name__ for tool in bindings]
+    assert len(names) == len(set(names))
+
+
+def test_adk_can_build_declarations_for_every_binding(bindings: list[Any]) -> None:
+    for tool in bindings:
+        declaration = FunctionTool(func=tool)._get_declaration()
+        assert declaration is not None
+        assert declaration.name == tool.__name__
+        assert declaration.description
+
+
+# --- data quality evidence ---------------------------------------------
+
+
+def test_build_evidence_is_sorted_and_stable() -> None:
+    """The evidence bundle feeds the L1 cache key, so an unsorted or
+    unstable bundle means the cache never hits.
+    """
+    snapshot = _REPO_ROOT / "data" / "snapshot"
+    if not list(snapshot.glob("*/manifest.json")):
+        pytest.skip("no frozen snapshot — run scripts/10_ingest.py --freeze")
+
+    first = build_evidence(snapshot)
+    second = build_evidence(snapshot)
+
+    source_ids = [s["source_id"] for s in first.evidence["sources"]]
+    assert source_ids == sorted(source_ids)
+    assert json.dumps(first.evidence, sort_keys=True, default=str) == json.dumps(
+        second.evidence, sort_keys=True, default=str
+    )
+
+
+def test_build_evidence_reports_observed_row_counts() -> None:
+    snapshot = _REPO_ROOT / "data" / "snapshot"
+    if not list(snapshot.glob("*/manifest.json")):
+        pytest.skip("no frozen snapshot — run scripts/10_ingest.py --freeze")
+
+    bundle = build_evidence(snapshot)
+    for source in bundle.evidence["sources"]:
+        observed = source["observed"]
+        assert "row_count" in observed
+        assert "null_rate_per_column" in observed
+        assert isinstance(observed["row_count_matches_manifest"], bool)

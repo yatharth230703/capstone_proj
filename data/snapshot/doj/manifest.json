@@ -1,0 +1,22 @@
+{
+  "source_id": "doj",
+  "dataset_name": "DOJ Press Releases (healthcare-fraud filtered)",
+  "original_publisher": "U.S. Department of Justice",
+  "access_provider": "justice.gov RSS feed",
+  "source_url": "https://www.justice.gov/news/rss?type=press_release",
+  "license_or_terms": "public domain (U.S. Government Work)",
+  "snapshot_date": "2026-08-06",
+  "retrieved_at": "2026-08-06T16:09:57.992095Z",
+  "checksum_sha256": "39e77a4ca69d067f90379a293ab65ee209317fb67454e31651dbcc5d937f057c",
+  "schema_version": "doj-rss-2.0",
+  "coverage": {
+    "topic_filter": "healthcare_fraud",
+    "window": "recent (~1-2 days)"
+  },
+  "freshness_status": "current",
+  "known_limitations": [
+    "RSS feed covers only a shallow recent window (~1-2 days); server-side topic/keyword filters are ignored by the feed, so filtering is done client-side against title+description",
+    "deep archive coverage (plan's ~300-500 release estimate) requires Playwright MCP against justice.gov/news, which is Akamai-protected against plain HTTP clients — deferred to M7"
+  ],
+  "row_count": 1
+}

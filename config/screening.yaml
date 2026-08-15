@@ -1,0 +1,45 @@
+# Cohort, signal thresholds, and scoring config (plan §5.1, §8, §10).
+# Nothing in tools/signal_tools.py or ingest/synthetic.py hardcodes these —
+# they all read from here, so changing the cohort or a threshold is a config
+# edit, not a code change.
+version: "1.0.0"
+
+cohort:
+  taxonomy_prefix: "332" # DME suppliers — chosen for enforcement density and clean taxonomy boundaries
+  states: ["FL", "TX", "CA"]
+
+# Every signal tool records the threshold it used, so a case packet is
+# reproducible even if this file changes later.
+thresholds:
+  address_degree: 5
+  phone_degree: 5
+  officer_degree: 4
+  enumeration_burst_count: 5
+  enumeration_burst_window_days: 90
+  address_churn_count: 3
+  address_churn_window_days: 365
+  exclusion_proximity_max_hops: 3
+  community_exclusion_density_min_fraction: 0.15
+  geographic_spread_min_km: 1500.0
+  phoenix_pattern_max_months_since_exclusion: 24
+
+# Overlapping signals that derive from one underlying fact collapse into one
+# family weight (plan §10 — required so e.g. address_degree and
+# enumeration_burst, which are both about the same address cluster, don't
+# get counted as two independent indicators).
+signal_families:
+  address_anomaly: [address_degree, enumeration_burst, address_churn]
+  network_anomaly: [phone_degree, officer_degree, geographic_spread]
+  adverse_history: [exclusion_proximity, community_exclusion_density, phoenix_pattern]
+
+# Escalation gate (plan §10, verbatim):
+#   high_priority requires:
+#     >= 3 materially independent signal families
+#     AND >= 1 authoritative government source OR strong quantitative anomaly
+#     AND no unresolved critical entity-match conflict
+#     AND evidence freshness within threshold
+# The last two conditions are evaluated by workflow/state.py's ScoringService
+# (M6) against live case state, not by a static threshold here.
+escalation_gate:
+  min_independent_signal_families: 3
+  evidence_freshness_days: 180

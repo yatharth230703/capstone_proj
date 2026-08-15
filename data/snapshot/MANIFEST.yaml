@@ -1,0 +1,176 @@
+frozen_at: '2026-08-06T16:10:24.253453+00:00'
+sources:
+  doj:
+    access_provider: justice.gov RSS feed
+    checksum_sha256: 39e77a4ca69d067f90379a293ab65ee209317fb67454e31651dbcc5d937f057c
+    coverage:
+      topic_filter: healthcare_fraud
+      window: recent (~1-2 days)
+    dataset_name: DOJ Press Releases (healthcare-fraud filtered)
+    freshness_status: current
+    known_limitations:
+    - RSS feed covers only a shallow recent window (~1-2 days); server-side topic/keyword
+      filters are ignored by the feed, so filtering is done client-side against title+description
+    - "deep archive coverage (plan's ~300-500 release estimate) requires Playwright\
+      \ MCP against justice.gov/news, which is Akamai-protected against plain HTTP\
+      \ clients \u2014 deferred to M7"
+    license_or_terms: public domain (U.S. Government Work)
+    original_publisher: U.S. Department of Justice
+    retrieved_at: '2026-08-06T16:09:57.992095Z'
+    row_count: 1
+    schema_version: doj-rss-2.0
+    snapshot_date: '2026-08-06'
+    source_id: doj
+    source_url: https://www.justice.gov/news/rss?type=press_release
+  leie:
+    access_provider: HHS OIG
+    checksum_sha256: d9211e32313a494efaf603302842a9f7426efd744bbf3c0af6f0547778c9f51d
+    coverage:
+      jurisdiction: US
+      scope: national, all states
+    dataset_name: HHS OIG List of Excluded Individuals/Entities (LEIE)
+    freshness_status: current
+    known_limitations:
+    - "npi is frequently null (LEIE predates NPI and many entries are individuals\
+      \ without an NPI on file) \u2014 never auto-link an exclusion lacking an NPI"
+    license_or_terms: public domain (U.S. Government Work)
+    original_publisher: HHS Office of Inspector General
+    retrieved_at: '2026-08-06T16:09:57.715613Z'
+    row_count: 83665
+    schema_version: leie-updated-csv-v1
+    snapshot_date: '2026-08-06'
+    source_id: leie
+    source_url: https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv
+  nppes:
+    access_provider: CMS NPI Registry API
+    checksum_sha256: 8644c1e19a3d0fb65587d7248995a35b5536009365093ed66b99295aa2be1fbd
+    coverage:
+      states:
+      - FL
+      - TX
+      - CA
+      taxonomy_prefix: '332'
+    dataset_name: NPPES NPI Registry
+    freshness_status: current
+    known_limitations:
+    - taxonomy_description is a fuzzy text match on the NPPES API; coverage is verified
+      against the full NUCC '332' code table, not assumed from one query
+    license_or_terms: public domain (U.S. Government Work)
+    original_publisher: Centers for Medicare & Medicaid Services (CMS)
+    retrieved_at: '2026-08-06T16:09:54.475761Z'
+    row_count: 8417
+    schema_version: npi-registry-api-2.1
+    snapshot_date: '2026-08-06'
+    source_id: nppes
+    source_url: https://npiregistry.cms.hhs.gov/api/
+  state_medicaid_ca:
+    access_provider: California Department of Health Care Services (DHCS)
+    checksum_sha256: e541baa74e84032e93a74e6a2b88a94466bab6dc4f061f0c9c5e977fe257f5f2
+    coverage:
+      exclusion_authority: state_medicaid
+      jurisdiction: CA
+    dataset_name: DHCS Medi-Cal Suspended & Ineligible Provider (S&I) List
+    freshness_status: current
+    known_limitations:
+    - npi is always null for this source; auto-link is prohibited for any match lacking
+      an exact identifier (CLAUDE.md Amendment 1)
+    - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
+      \ into one precision number (CLAUDE.md Amendment 1)"
+    license_or_terms: public domain (state government work)
+    original_publisher: California Department of Health Care Services (DHCS)
+    retrieved_at: '2026-08-06T16:10:16.295514Z'
+    row_count: 23229
+    schema_version: state-medicaid-v1
+    snapshot_date: '2026-08-06'
+    source_id: state_medicaid_ca
+    source_url: https://data.chhs.ca.gov/api/3/action/package_show?id=8f70e05d-baa5-4296-a5ab-36318d530670
+  state_medicaid_fl:
+    access_provider: Florida Agency for Health Care Administration (AHCA)
+    checksum_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    coverage:
+      exclusion_authority: state_medicaid
+      jurisdiction: FL
+    dataset_name: AHCA Medicaid Sanctioned/Terminated Provider List
+    freshness_status: unknown
+    known_limitations:
+    - npi is always null for this source; auto-link is prohibited for any match lacking
+      an exact identifier (CLAUDE.md Amendment 1)
+    - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
+      \ into one precision number (CLAUDE.md Amendment 1)"
+    - 'blocked by source-side bot protection (HTTP client): Client error ''403 Forbidden''
+      for url ''https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity''
+
+      For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403;
+      requires Playwright MCP (plan M7), not yet wired'
+    license_or_terms: public domain (state government work)
+    original_publisher: Florida Agency for Health Care Administration (AHCA)
+    retrieved_at: '2026-08-06T16:09:58.970841Z'
+    row_count: 0
+    schema_version: state-medicaid-v1
+    snapshot_date: '2026-08-06'
+    source_id: state_medicaid_fl
+    source_url: https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity
+  state_medicaid_tx:
+    access_provider: Texas Health and Human Services - Office of Inspector General
+      (HHS-OIG)
+    checksum_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    coverage:
+      exclusion_authority: state_medicaid
+      jurisdiction: TX
+    dataset_name: Texas HHS-OIG Exclusions List
+    freshness_status: unknown
+    known_limitations:
+    - npi is always null for this source; auto-link is prohibited for any match lacking
+      an exact identifier (CLAUDE.md Amendment 1)
+    - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
+      \ into one precision number (CLAUDE.md Amendment 1)"
+    - 'blocked by source-side bot protection (HTTP client): Client error ''403 Forbidden''
+      for url ''https://oig.hhs.texas.gov/exclusions''
+
+      For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403;
+      requires Playwright MCP (plan M7), not yet wired'
+    license_or_terms: public domain (state government work)
+    original_publisher: Texas Health and Human Services - Office of Inspector General
+      (HHS-OIG)
+    retrieved_at: '2026-08-06T16:09:59.065912Z'
+    row_count: 0
+    schema_version: state-medicaid-v1
+    snapshot_date: '2026-08-06'
+    source_id: state_medicaid_tx
+    source_url: https://oig.hhs.texas.gov/exclusions
+  synthetic_exclusions:
+    access_provider: ingest/synthetic.py
+    checksum_sha256: 647d307a103d49756e9e123b6a9691a00011a15fd858ededfbc66a9c2a699215
+    coverage:
+      scenarios: S05, S06, S10
+    dataset_name: Synthetic Scenario Exclusions
+    freshness_status: current
+    known_limitations: []
+    license_or_terms: n/a (synthetic)
+    original_publisher: Project Specter (generated)
+    retrieved_at: '2026-08-06T16:10:16.327104Z'
+    row_count: 4
+    schema_version: 1.0.0
+    snapshot_date: '2026-08-06'
+    source_id: synthetic_exclusions
+    source_url: generated:local
+  synthetic_providers:
+    access_provider: ingest/synthetic.py
+    checksum_sha256: 3802cc3e2022aad96d9ddce8aa517a10e9505f045a1ef5dcc3e3c64f5e36be43
+    coverage:
+      benign_controls: 150
+      scenarios: S01-S10
+    dataset_name: Synthetic Scenario Providers
+    freshness_status: current
+    known_limitations:
+    - "S01 (shell at residential address) and S08 (dormant reactivation) have no corresponding\
+      \ Phase 1 detector \u2014 no address-type classifier, no utilization data. expected_signals\
+      \ is deliberately empty for both."
+    license_or_terms: n/a (synthetic)
+    original_publisher: Project Specter (generated)
+    retrieved_at: '2026-08-06T16:10:16.323230Z'
+    row_count: 186
+    schema_version: 1.0.0
+    snapshot_date: '2026-08-06'
+    source_id: synthetic_providers
+    source_url: generated:local

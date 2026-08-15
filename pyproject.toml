@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "specter"
+version = "0.1.0"
+description = "Project Specter Phase 1 — multi-agent healthcare provider screening architecture"
+requires-python = "==3.11.*"
+dependencies = [
+    "google-adk==2.6.2",
+    "litellm==1.95.0",
+    "neo4j==6.2.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "polars==1.43.2",
+    "usaddress==0.5.16",
+    "phonenumbers==9.0.36",
+    "rapidfuzz==3.14.5",
+    "python-igraph==1.0.0",
+    "structlog==26.1.0",
+    "pdfplumber==0.11.10",
+    "redis==8.1.0",
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+    "openinference-instrumentation-google-adk==0.1.18",
+    "openinference-instrumentation-litellm==0.1.35",
+    "arize-phoenix-otel==0.16.1",
+    "opentelemetry-sdk==1.42.1",
+    "opentelemetry-exporter-otlp==1.42.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.1",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "types-PyYAML==6.0.12.20260724",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/specter"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+# usaddress and igraph ship no py.typed marker / stubs
+module = ["usaddress", "igraph"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

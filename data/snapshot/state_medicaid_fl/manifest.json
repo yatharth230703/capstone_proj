@@ -1,0 +1,23 @@
+{
+  "source_id": "state_medicaid_fl",
+  "dataset_name": "AHCA Medicaid Sanctioned/Terminated Provider List",
+  "original_publisher": "Florida Agency for Health Care Administration (AHCA)",
+  "access_provider": "Florida Agency for Health Care Administration (AHCA)",
+  "source_url": "https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity",
+  "license_or_terms": "public domain (state government work)",
+  "snapshot_date": "2026-08-06",
+  "retrieved_at": "2026-08-06T16:09:58.970841Z",
+  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema_version": "state-medicaid-v1",
+  "coverage": {
+    "jurisdiction": "FL",
+    "exclusion_authority": "state_medicaid"
+  },
+  "freshness_status": "unknown",
+  "known_limitations": [
+    "npi is always null for this source; auto-link is prohibited for any match lacking an exact identifier (CLAUDE.md Amendment 1)",
+    "state exclusion is a SECONDARY label set — do not pool with federal LEIE/DOJ into one precision number (CLAUDE.md Amendment 1)",
+    "blocked by source-side bot protection (HTTP client): Client error '403 Forbidden' for url 'https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403; requires Playwright MCP (plan M7), not yet wired"
+  ],
+  "row_count": 0
+}

@@ -1,0 +1,68 @@
+services:
+  neo4j:
+    image: neo4j:5.26.29-community
+    environment:
+      NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-specter-dev-pw}"
+      # 512m was too tight once the cohort graph + Leiden communities grew:
+      # a single-transaction `MATCH (n) DETACH DELETE n` over 100k+
+      # nodes/edges hit dbms.memory.transaction.total.max and silently
+      # left partial data behind. Bulk deletes should use
+      # `CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 1000 ROWS` regardless
+      # of heap size, but a bigger heap gives real headroom too.
+      NEO4J_server_memory_heap_initial__size: "1G"
+      NEO4J_server_memory_heap_max__size: "1G"
+      NEO4J_server_memory_pagecache_size: "512m"
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  phoenix:
+    image: arizephoenix/phoenix:version-19.18.0
+    ports:
+      - "6006:6006"
+    volumes:
+      - phoenix_data:/mnt/data
+    environment:
+      PHOENIX_WORKING_DIR: "/mnt/data"
+    healthcheck:
+      # The phoenix image has no /bin/sh, so CMD-SHELL healthchecks fail with
+      # "exec: /bin/sh: no such file or directory". Use python3 directly.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:6006', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: redis:8.6.5-alpine
+    ports:
+      # Host 6380, not 6379 — an unrelated container on this machine already
+      # holds 6379 (diligence-redis). Container-internal port stays 6379.
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  neo4j_data:
+  phoenix_data:
+  redis_data:

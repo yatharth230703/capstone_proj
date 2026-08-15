@@ -1,0 +1,21 @@
+{
+  "source_id": "leie",
+  "dataset_name": "HHS OIG List of Excluded Individuals/Entities (LEIE)",
+  "original_publisher": "HHS Office of Inspector General",
+  "access_provider": "HHS OIG",
+  "source_url": "https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv",
+  "license_or_terms": "public domain (U.S. Government Work)",
+  "snapshot_date": "2026-08-06",
+  "retrieved_at": "2026-08-06T16:09:57.715613Z",
+  "checksum_sha256": "d9211e32313a494efaf603302842a9f7426efd744bbf3c0af6f0547778c9f51d",
+  "schema_version": "leie-updated-csv-v1",
+  "coverage": {
+    "jurisdiction": "US",
+    "scope": "national, all states"
+  },
+  "freshness_status": "current",
+  "known_limitations": [
+    "npi is frequently null (LEIE predates NPI and many entries are individuals without an NPI on file) — never auto-link an exclusion lacking an NPI"
+  ],
+  "row_count": 83665
+}

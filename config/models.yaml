@@ -1,0 +1,106 @@
+# Router policy table (plan §4). CLAUDE.md Amendment 2 applied: no T3_judge
+# (Kimi) tier exists — judge_case_rubric routes to T2_reasoning, and the
+# code/report must say the judge shares a model family with the agents it
+# grades (see judge/rubric_judge.py, M9).
+#
+# Azure model strings are NOT hardcoded here — `model_env` names the .env var
+# holding the actual deployment name (AZURE_DEPLOYMENT_NANO/MINI/MAIN), since
+# that's how this operator's .env is already structured. llm/router.py
+# resolves `model_env` through Settings at load time.
+#
+# price_* fields are null until the operator fills in real Azure/Vertex
+# pricing (plan §7.4: "a wrong cost chart is worse than no cost chart").
+version: "1.0.0"
+
+tiers:
+  T0_bulk:
+    provider: azure
+    model_env: AZURE_DEPLOYMENT_NANO
+    max_output_tokens: 512
+    temperature: 0.0
+    supports_prefix_cache: true
+    price_input_per_1m: null
+    price_cached_input_per_1m: null
+    price_output_per_1m: null
+
+  T1_workhorse:
+    provider: azure
+    model_env: AZURE_DEPLOYMENT_MINI
+    max_output_tokens: 2048
+    temperature: 0.1
+    supports_prefix_cache: true
+    price_input_per_1m: null
+    price_cached_input_per_1m: null
+    price_output_per_1m: null
+
+  T2_reasoning:
+    provider: azure
+    model_env: AZURE_DEPLOYMENT_MAIN
+    max_output_tokens: 4096
+    temperature: 0.2
+    supports_prefix_cache: true
+    price_input_per_1m: null
+    price_cached_input_per_1m: null
+    price_output_per_1m: null
+
+  T_ground:
+    provider: vertex
+    model: "gemini-2.5-flash"
+    max_output_tokens: 2048
+    temperature: 0.0
+    supports_prefix_cache: false
+    price_input_per_1m: null
+    price_cached_input_per_1m: null
+    price_output_per_1m: null
+
+# task_class -> tier. Every LLM call in the system declares a task_class.
+# Unknown task_class raises — llm/router.py never defaults silently.
+routing:
+  normalize_address: T0_bulk
+  classify_taxonomy: T0_bulk
+  dedup_evidence: T0_bulk
+  coerce_schema: T0_bulk
+  prefilter_entity_pair: T0_bulk
+
+  adjudicate_entity_match: T1_workhorse
+  extract_enforcement_case: T1_workhorse
+  narrate_graph_signal: T1_workhorse
+  triage_provider: T1_workhorse
+  summarize_community: T1_workhorse
+  assess_source_quality: T1_workhorse
+
+  plan_investigation: T2_reasoning
+  challenge_hypothesis: T2_reasoning
+  synthesize_case: T2_reasoning
+
+  grounded_research: T_ground
+  judge_case_rubric: T2_reasoning # was T3_judge (Kimi) — removed, CLAUDE.md Amendment 2
+
+# Escalation: conditions under which a task_class is re-run one tier up.
+# Structured (field/op/value), not eval()'d expression strings (plan §7.3).
+# `task_class: null` means the rule applies regardless of task_class.
+escalation:
+  - task_class: triage_provider
+    conditions:
+      - { field: confidence, op: lt, value: 0.60 }
+    to: T2_reasoning
+    max_retries: 1
+
+  - task_class: adjudicate_entity_match
+    conditions:
+      - { field: match_probability, op: gte, value: 0.45 }
+      - { field: match_probability, op: lte, value: 0.65 }
+    to: T2_reasoning
+    max_retries: 1
+
+  - task_class: null
+    conditions:
+      - { field: schema_validation_failed, op: eq, value: true }
+    to: T2_reasoning
+    max_retries: 1
+
+profiles:
+  cost:
+    overrides: { plan_investigation: T1_workhorse, synthesize_case: T1_workhorse }
+  quality:
+    overrides: { triage_provider: T2_reasoning, adjudicate_entity_match: T2_reasoning }
