@@ -43,7 +43,7 @@ def main() -> None:
         auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
     )
     try:
-        counts = load_snapshot(driver, SNAPSHOT_DIR, hidden_npis)
+        counts = load_snapshot(driver, SNAPSHOT_DIR, settings, hidden_npis)
         counts.update(load_synthetic_snapshot(driver, SNAPSHOT_DIR))
         logger.info("build_graph.complete", counts=counts, hidden_npi_count=len(hidden_npis))
     finally:

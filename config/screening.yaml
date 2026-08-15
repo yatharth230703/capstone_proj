@@ -22,6 +22,10 @@ thresholds:
   community_exclusion_density_min_fraction: 0.15
   geographic_spread_min_km: 1500.0
   phoenix_pattern_max_months_since_exclusion: 24
+  # B2 (plan §7.1) is above the cache boundary and shared by every agent —
+  # all 255 communities would add ~20k tokens to every single call, so only
+  # the top N by member_count are rendered (graph/summaries.py render_b2).
+  community_summary_cap: 40
 
 # Overlapping signals that derive from one underlying fact collapse into one
 # family weight (plan §10 — required so e.g. address_degree and

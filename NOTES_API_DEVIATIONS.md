@@ -236,3 +236,41 @@ Note also that `GoogleSearchTool.bypass_multi_tools_limit` does exist in
 an auto-generated single-tool search sub-agent with its own canned
 instruction, which cannot be audited against our evidence policy. Prefer the
 explicit isolation pattern `CLAUDE.md` already mandates.
+
+---
+
+## D11 — `litellm.embedding()`'s `response.data` items are plain dicts, not attribute-access objects
+
+**Found:** M2. **Affects:** `graph/embeddings.py`.
+
+Verified live against `text-embedding-3-large` on this deployment (same
+`openai/<deployment>` + `api_base` v1-surface form as D1): each item in
+`response.data` is a `dict` keyed `embedding`/`index`/`object` —
+`item["index"]`, not `item.index`. `EmbeddingResponse` elsewhere in the
+LiteLLM codebase suggests attribute access should work; on this deployment it
+does not. Sort by `item["index"]` before trusting order — arrival order is
+not guaranteed, and a wrong-order batch silently mis-assigns every vector.
+
+Confirmed 3072 dims, matching `graph/schema.cypher`'s vector index
+declarations — no `dimensions` override needed.
+
+---
+
+## D12 — Neo4j 5.26's `db.create.setNodeVectorProperty` works fine inside `UNWIND`
+
+**Found:** M2 (research only, not a deviation — recorded because the plan
+doesn't spell out the call form). **Affects:** `graph/summaries.py`,
+`graph/enforcement_loader.py`.
+
+This void procedure can be called per-row directly inside an `UNWIND`,
+without the `CALL { ... }` subquery syntax some Neo4j versions require for
+per-row procedure calls:
+
+```cypher
+UNWIND $rows AS row
+MATCH (n:SomeLabel {id: row.id})
+CALL db.create.setNodeVectorProperty(n, 'embedding', row.vector)
+```
+
+Verified live. `SET n.embedding = $vector` also stores the list but the
+vector index never picks it up — use the procedure, not a plain `SET`.

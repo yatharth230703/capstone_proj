@@ -74,6 +74,15 @@ def test_get_community_context_s10(driver: Driver) -> None:
     assert summary.characterization is None  # no AZURE_API_KEY yet — honest gap, not a crash
 
 
-def test_search_enforcement_cases_empty_until_m5(driver: Driver) -> None:
+def test_search_enforcement_cases_matches_loaded_doj_case(driver: Driver) -> None:
+    # M2: graph/loader.load_enforcement_cases loads the DOJ snapshot (1 row
+    # today, plan §5.3/debt D-2). This is a substring match over
+    # title/description, not the vector search in GraphRetriever.semantic().
     hits = gt.search_enforcement_cases(driver, "fraud")
+    assert hits
+    assert all(hit.source_ids for hit in hits)
+
+
+def test_search_enforcement_cases_no_match_returns_empty(driver: Driver) -> None:
+    hits = gt.search_enforcement_cases(driver, "xyzzy-no-such-term")
     assert hits == []

@@ -1,15 +1,13 @@
 """Hybrid GraphRAG retrieval (plan §6.5).
 
-`local()` is deterministic Cypher k-hop expansion — no LLM, fully
-implemented. `global_()` (vector search over community summaries) and
-`semantic()` (vector search over EnforcementCase text) both need to embed the
-query string via the Azure `text-embedding-3-large` deployment, and need
-`graph/embeddings.py` / `graph/summaries.py` to have populated the vector
-indexes in the first place. Neither `AZURE_API_KEY` nor
-`AZURE_EMBEDDING_DEPLOYMENT` is configured yet, so both are wired (correct
-signature, correct `RetrievalResult` shape) but return empty results with a
-logged reason rather than raising — `hybrid()` degrades to local-only rather
-than crashing when they're unavailable.
+`local()` is deterministic Cypher k-hop expansion — no LLM. `global_()`
+(vector search over community summaries) and `semantic()` (vector search
+over EnforcementCase text) embed the query string via `graph/embeddings.py`
+and query the `community_embedding`/`case_embedding` vector indexes
+populated by `graph/summaries.py` / `graph/loader.load_enforcement_cases`.
+Both degrade to an empty, logged result rather than raising when their index
+is empty (e.g. no communities summarized yet) — but `hybrid()` no longer
+gates on `AZURE_API_KEY` being configured, since it now is.
 
 `hops` capped at 3, `limit` capped at 200 — hard-coded ceilings, not config
 (plan §6.5: an unbounded expansion on a hub node returns the whole graph).
@@ -21,7 +19,8 @@ import structlog
 from neo4j import Driver
 
 from specter.core.contracts import RetrievalResult, RetrievedItem
-from specter.settings import get_settings
+from specter.graph.embeddings import embed_texts
+from specter.settings import Settings, get_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -30,8 +29,9 @@ MAX_LIMIT = 200
 
 
 class GraphRetriever:
-    def __init__(self, driver: Driver) -> None:
+    def __init__(self, driver: Driver, settings: Settings | None = None) -> None:
         self._driver = driver
+        self._settings = settings or get_settings()
 
     def local(self, npi: str, hops: int = 2, limit: int = 50) -> RetrievalResult:
         hops = min(hops, MAX_HOPS)
@@ -60,30 +60,59 @@ class GraphRetriever:
         ]
         return RetrievalResult(mode="local", items=items, query_npi=npi)
 
+    def _embed_query(self, query: str) -> list[float] | None:
+        settings = self._settings
+        if settings.azure_api_key is None or settings.azure_embedding_deployment is None:
+            logger.info(
+                "retrieval.embedding_unavailable",
+                reason="AZURE_API_KEY/AZURE_EMBEDDING_DEPLOYMENT not configured",
+            )
+            return None
+        return embed_texts([query], self._settings)[0]
+
+    def _vector_search(
+        self, index: str, item_type: str, id_prop: str, query: str, k: int
+    ) -> list[RetrievedItem]:
+        vector = self._embed_query(query)
+        if vector is None:
+            return []
+        with self._driver.session() as session:
+            records = session.run(
+                f"""
+                CALL db.index.vector.queryNodes('{index}', $k, $vector)
+                YIELD node, score
+                RETURN node, score
+                """,
+                k=k,
+                vector=vector,
+            ).data()
+        if not records:
+            logger.info("retrieval.vector_index_empty", index=index)
+        return [
+            RetrievedItem(
+                item_type=item_type,
+                data={
+                    **{key: value for key, value in dict(r["node"]).items() if key != "embedding"},
+                    "score": r["score"],
+                },
+                source_ids=[f"graph:{item_type.lower()}:{r['node'][id_prop]}"],
+            )
+            for r in records
+        ]
+
     def global_(self, query: str, k: int = 5) -> RetrievalResult:
-        logger.warning(
-            "retrieval.global_unavailable",
-            reason="community summaries/embeddings not populated (needs AZURE_API_KEY)",
-        )
-        return RetrievalResult(mode="global", items=[], query_text=query)
+        items = self._vector_search("community_embedding", "Community", "community_id", query, k)
+        return RetrievalResult(mode="global", items=items, query_text=query)
 
     def semantic(self, query: str, k: int = 10) -> RetrievalResult:
-        logger.warning(
-            "retrieval.semantic_unavailable",
-            reason="EnforcementCase embeddings not populated (needs AZURE_API_KEY)",
-        )
-        return RetrievalResult(mode="semantic", items=[], query_text=query)
+        items = self._vector_search("case_embedding", "EnforcementCase", "case_id", query, k)
+        return RetrievalResult(mode="semantic", items=items, query_text=query)
 
     def hybrid(self, npi: str, query: str) -> RetrievalResult:
         local_result = self.local(npi)
         combined = list(local_result.items)
-
-        settings = get_settings()
-        if settings.azure_api_key is not None:
-            combined.extend(self.global_(query).items)
-            combined.extend(self.semantic(query).items)
-        else:
-            logger.info("retrieval.hybrid_local_only", reason="AZURE_API_KEY not configured")
+        combined.extend(self.global_(query).items)
+        combined.extend(self.semantic(query).items)
 
         deduped: list[RetrievedItem] = []
         seen: set[str] = set()

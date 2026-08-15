@@ -22,6 +22,8 @@ Currently defined:
 - EvidenceArtifact, Citation, CitationReport (M4, plan §8 `tools/evidence_tools.py`)
 - AgentOutput, SourceVerdict, DataQualityReport, AgentRunResult (M1 of
   BUILD_MILESTONES.md, plan §9 `agents/_base.py` + `agents/data_quality.py`)
+- CommunityCharacterization (M2 of BUILD_MILESTONES.md, plan §6.4
+  `graph/summaries.py`)
 """
 
 from __future__ import annotations
@@ -239,6 +241,7 @@ class ScreeningThresholds(SpecterModel):
     community_exclusion_density_min_fraction: float
     geographic_spread_min_km: float
     phoenix_pattern_max_months_since_exclusion: int
+    community_summary_cap: int = Field(gt=0)
 
 
 class ProviderProfile(SpecterModel):
@@ -389,6 +392,19 @@ class DataQualityReport(AgentOutput):
     per_source: list[SourceVerdict]
     blocking_reasons: list[str]
     recommended_action: str
+
+
+class CommunityCharacterization(AgentOutput):
+    """Output of `graph/summaries.py`'s `summarize_community` LLM call (plan
+    §6.4). Strict-mode-safe (no defaulted fields) unlike `CommunitySummary`,
+    which it gets mapped onto for storage — `notable_members` here is
+    unvalidated model output; the caller must drop any NPI not actually in
+    the community before trusting it (CLAUDE.md hard rule 2).
+    """
+
+    characterization: str
+    notable_members: list[str]
+    risk_themes: list[str]
 
 
 class AgentRunResult(SpecterModel):

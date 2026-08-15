@@ -1,12 +1,11 @@
 """Loads `data/snapshot/` (plan §5.3's frozen snapshot — never `data/raw/`)
 into Neo4j per `graph/schema.cypher`.
 
-Scope for M2: Provider, Address, Phone, Officer, Taxonomy, Exclusion,
-DataSource nodes and LOCATED_AT/HAS_PHONE/HAS_OFFICER/HAS_TAXONOMY/
-EXCLUDED_BY edges. `EnforcementCase` loading is deliberately not here — DOJ
-press releases don't carry an NPI, matching a release to a provider is an
-entity-resolution judgment call (plan §9.5, the Enforcement Intelligence
-Agent), not something a deterministic loader should guess at.
+Provider, Address, Phone, Officer, Taxonomy, Exclusion, DataSource nodes and
+LOCATED_AT/HAS_PHONE/HAS_OFFICER/HAS_TAXONOMY/EXCLUDED_BY edges.
+`EnforcementCase` loading lives in `graph/enforcement_loader.py` (M2, split
+out to keep this module under CLAUDE.md's 400-line ceiling) —
+`load_snapshot` calls it directly.
 
 `--hide-labels` (plan §12.1): `hidden_npis` skips creating `EXCLUDED_BY`
 edges for the given NPIs (the Exclusion node itself is still loaded) so those
@@ -27,6 +26,8 @@ from neo4j import Driver
 from specter.core.contracts import SourceManifest
 from specter.core.enums import DataOrigin, EntityType, ExclusionAuthority
 from specter.core.hashing import sha256_text
+from specter.graph.enforcement_loader import load_enforcement_cases
+from specter.settings import Settings
 from specter.tools.entity_tools import normalize_address, normalize_phone
 
 logger = structlog.get_logger(__name__)
@@ -378,7 +379,10 @@ def load_state_medicaid_exclusions(
 
 
 def load_snapshot(
-    driver: Driver, snapshot_dir: Path, hidden_npis: set[str] | None = None
+    driver: Driver,
+    snapshot_dir: Path,
+    settings: Settings,
+    hidden_npis: set[str] | None = None,
 ) -> dict[str, int]:
     hidden = hidden_npis or set()
     apply_schema(driver)
@@ -391,4 +395,5 @@ def load_snapshot(
         counts[f"state_medicaid_{jurisdiction.lower()}_exclusions"] = (
             load_state_medicaid_exclusions(driver, snapshot_dir, jurisdiction, hidden)
         )
+    counts["enforcement_cases"] = load_enforcement_cases(driver, snapshot_dir, settings)
     return counts

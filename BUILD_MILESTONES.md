@@ -176,7 +176,7 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 |---|---|---|---|
 | — | *Pre-existing* | M0–M4 of `phase_1_build_plan.md` §13: contracts, ingest, graph load, llm layer, deterministic tools | `DONE` |
 | **M1** | Agent foundation | `agents/_base.py` factory, ADK 2.x verification, tool bindings, DataQuality agent | `DONE` |
-| **M2** | Graph RAG completion | `graph/embeddings.py`, `graph/summaries.py`, EnforcementCase corpus, `retrieval.global_/semantic` | `TODO` |
+| **M2** | Graph RAG completion | `graph/embeddings.py`, `graph/summaries.py`, EnforcementCase corpus, `retrieval.global_/semantic` | `DONE` |
 | **M3** | Investigation agents | EntityResolution, GraphInvestigation, EnforcementIntel | `TODO` |
 | **M4** | Grounded research | Vertex Gemini agent + `AgentTool` isolation, grounding citations | `TODO` |
 | **M5** | Judgement agents | Skeptic, CaseReporter, `CasePacket`, banned-vocabulary enforcement | `TODO` |
@@ -192,14 +192,14 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: end of M1.**
+**Last updated: end of M2.**
 
 ### Verified green
 
 ```
-pytest tests/ -q          134 passed
+pytest tests/ -q          141 passed
 ruff check src/ tests/ scripts/   All checks passed
-mypy src/                 Success: no issues in 36 source files
+mypy src/                 Success: no issues in 40 source files
 docker compose ps         neo4j, phoenix, redis — all healthy
 ```
 
@@ -224,7 +224,10 @@ does this — see `NOTES_API_DEVIATIONS.md` D1 before touching model strings.
 
 All verified live: `gpt-5.4-nano` (T0), `gpt-5.4-mini` (T1), `gpt-5.4` (T2),
 and `text-embedding-3-large` → **3072 dims**, matching the vector index
-dimensions already declared in `graph/schema.cypher`.
+dimensions already declared in `graph/schema.cypher`. Embeddings use the
+same `openai/<deployment>` + `api_base` call form as chat completions — see
+`NOTES_API_DEVIATIONS.md` D11 for the one surprise (`response.data` items are
+plain dicts keyed `embedding`/`index`, not attribute-access objects).
 
 **Vertex is NOT configured** — `GOOGLE_CLOUD_PROJECT` is empty. M4 is blocked
 on the operator supplying it.
@@ -232,8 +235,13 @@ on the operator supplying it.
 ### Prompt caching — measured, working
 
 Verified end to end through ADK: first call 0 cached tokens, second call
-**9,472 / 9,983 = 95%**. The current compiled prefix is **5,284 estimated /
-5,267 real tokens**.
+**9,472 / 9,983 = 95%**. B2 going from a placeholder to real community
+summaries (M2) grew the compiled prefix from 5,284 to **11,152 estimated
+tokens** (44,610 chars) — expect one *new* cold call after this milestone,
+same as after any B0-B3 edit; that's correct, not a regression. Because the
+prefix is identical across every agent by design, the 255 `summarize_community`
+calls in this milestone's own checkpoint already warmed Azure's server-side
+cache for it before `data_quality` was ever re-run.
 
 The caching cliff is higher than the plan assumed — 1,276 real tokens cached
 nothing; 1,550 cached 1,280. The invariant is now
@@ -251,11 +259,16 @@ nothing; 1,550 cached 1,280. The invariant is now
 | Community | 255 | | EXCLUDED_BY | 7 |
 | Taxonomy | 13 | | CHANGED_ADDRESS_TO | 3 |
 | DataSource | 8 | | | |
-| **EnforcementCase** | **0** | | | |
+| EnforcementCase | 1 | | | |
 
-255 communities is inside the plan's 40–400 target. `EnforcementCase` is zero
-because `graph/loader.py` deliberately does not load DOJ releases — see debt
-D-2.
+255 communities is inside the plan's 40–400 target. **All 255 now carry a
+3072-dim `embedding` and an LLM `characterization`** (M2, full run — 255 real
+`summarize_community` T1 calls, not a `--limit` dev sample; zero fabricated
+`notable_members` were caught/dropped across the run). `EnforcementCase` is 1
+because the DOJ snapshot itself is 1 row (debt D-2 refill is M7); that one
+row is loaded and embedded into `case_embedding`. No `Provider`→
+`EnforcementCase` edge exists — never will, from this loader; linking is
+M3's Enforcement Intelligence Agent's job.
 
 ### Frozen snapshot (`data/snapshot/`)
 
@@ -277,14 +290,29 @@ that is the agent working, not a bug.
 ### What exists in `src/specter/`
 
 Built and tested: `core/`, `ingest/` (4 connectors + synthetic), `graph/`
-(schema, loader, communities, retrieval), `llm/` (router, prompt compiler,
-response cache, ledger), `tools/` (graph, signal, entity, evidence, bindings),
-`agents/` (`_base.py`, `data_quality.py`).
+(schema, loader, enforcement_loader, communities, summaries, embeddings,
+retrieval), `llm/` (router, prompt compiler, response cache, ledger),
+`tools/` (graph, signal, entity, evidence, bindings), `agents/` (`_base.py`,
+`data_quality.py`).
 
 Still empty: `workflow/`, `judge/`, `obs/`. Missing entirely: `cli.py`,
-`tools/mcp_tools.py`, `graph/summaries.py`, `graph/embeddings.py`,
-`README.md`, `scripts/00_bootstrap.sh`, `scripts/40_screen.py`,
-`scripts/50_judge.py`.
+`tools/mcp_tools.py`, `README.md`, `scripts/00_bootstrap.sh`,
+`scripts/40_screen.py`, `scripts/50_judge.py`,
+`agents/entity_resolution.py`, `agents/graph_investigation.py`,
+`agents/enforcement_intel.py`, `data/reference/zcta_centroids.csv`.
+
+### Known gap in `tools/graph_tools.get_community_context` — read before M3
+
+It **recomputes structural facts fresh from Cypher every call and never
+reads the `characterization`/`notable_members`/`risk_themes` M2 just wrote
+onto every Community node** — the `CommunitySummary` it returns always has
+`characterization=None`. This isn't a bug M2 introduced (the function
+predates M2 and was correctly returning `None` because nothing existed to
+read yet); it's now stale, because something to read exists. Not fixed here
+— `graph_tools.py` isn't in M2's file manifest, and `tools/bindings.py`'s
+`get_community_context` binding (the one `narrate_graph_signal` will
+actually call) inherits the same gap. Tracked as debt D-9, due M3, because
+M3's Graph Investigation agent is the first consumer that will notice.
 
 ---
 
@@ -293,13 +321,15 @@ Still empty: `workflow/`, `judge/`, `obs/`. Missing entirely: `cli.py`,
 | ID | Item | Why deferred | Due |
 |---|---|---|---|
 | D-1 | `state_medicaid_fl` and `state_medicaid_tx` ingest **0 rows** — both sources are bot-blocked | Needs the Playwright MCP fetch path, which doesn't exist yet | **M7** |
-| D-2 | `doj` ingests **1 row**; no `EnforcementCase` nodes are in the graph | Semantic retrieval and the Enforcement agent both need a real corpus | **M2** (load) / **M7** (refill) |
+| D-2 | `doj` ingests **1 row**, loaded as 1 `EnforcementCase` node (M2) — the *loader* half is done, the *corpus size* half is still a gap | Semantic retrieval works against a 1-row corpus (`retrieval.semantic()` verified live), but 1 row is not a real corpus for the Enforcement agent to search | **M7** (refill via Playwright MCP) |
 | D-3 | `synthetic_providers` has 186 rows; plan §5.5 specifies 50 scenario + 150 controls = 200 | Not blocking; verify the S01–S10 scenario coverage is intact | **M6** |
 | D-4 | Amendment 3 geocoding is **not implemented** — no `data/reference/zcta_centroids.csv`, no `zip_centroid()`/`haversine_km()` in `entity_tools.py`. Only 2 of 8,603 providers have `latitude`, so `geographic_spread` never fires on real data | Out of M1's scope; `signal_tools` has a private `_haversine_km` but no centroid source | **M3** |
 | D-5 | The Data Quality verdict is **not deterministic** — the same snapshot returned `warn` on one run and `fail` on the next, because tier T1 runs at `temperature=0.1` | A pipeline gate should not flip. Options: per-agent temperature override, or make the gate honour the deterministic `ValidationReport` verdict and treat the agent as advisory | **M6** |
 | D-6 | No agent-level **escalation** yet. `router.should_escalate()` exists and is tested, but `run_agent` never calls it (`AgentRunResult.escalated` is always `False`) | Needs a second agent with a confidence field to escalate on | **M3** |
 | D-7 | Phoenix container runs but nothing exports to it. `_base.py` sets OTel span attributes with no tracer provider registered, so they go nowhere | Tracing setup is its own milestone | **M8** |
 | D-8 | `price_*` fields in `config/models.yaml` are all `null`, so `cost_usd` is always `NULL` | Deliberate — plan §7.4: "a wrong cost chart is worse than no cost chart". Operator must fill in real pricing | **M10** |
+| D-9 | `tools/graph_tools.get_community_context` (and the `tools/bindings.py` binding over it) never reads the `characterization`/`notable_members`/`risk_themes` M2 wrote onto every Community node — it recomputes structural facts fresh and always returns `characterization=None` | Not in M2's file manifest; the fix is a one-query edit (read the persisted fields alongside the structural aggregate) but touches a file M2 didn't own | **M3** |
+| D-10 | `EnforcementCase.legal_status` loaded by M2's `graph/enforcement_loader.py` comes from a **regex keyword heuristic** (`infer_legal_status`), not real adjudication — a loader has no business calling an LLM | Placeholder good enough to satisfy the schema without overclaiming (defaults to `alleged`, the weakest status, on no match); M3's `extract_enforcement_case` agent re-adjudicates from the full text and should overwrite it | **M3** |
 
 ---
 
@@ -389,206 +419,125 @@ python scripts/15_smoke_data_quality.py
 
 ---
 
-### M2 — Graph RAG completion · `TODO`
+### M2 — Graph RAG completion · `DONE`
 
-#### Action Plan
+**Delivered.** Pillar #1 finished — `global_()`/`semantic()` are real vector
+search, not stubs, and B2 carries real content. Full run, not a dev sample:
+all 255 communities got a real `summarize_community` LLM call (operator
+explicitly chose the full 255-call run over a `--limit` dev sample, given
+the real Azure cost).
 
-**Goal.** Finish pillar #1 (hybrid Graph RAG) and fill prompt block B2. Right
-now `GraphRetriever.global_()` and `.semantic()` are stubs that log a warning
-and return nothing, so `hybrid()` silently degrades to local-only — the
-"global" half of GraphRAG does not exist. This milestone builds the embedding
-layer, generates and persists community summaries, loads an `EnforcementCase`
-corpus so semantic search has something to search, and wires all three into
-B2 and into `retrieval.py`. Plan §6.4, §6.5, §7.1.
+| Path | What |
+|---|---|
+| `src/specter/graph/embeddings.py` | `embed_texts()` — 55 lines |
+| `src/specter/graph/summaries.py` | `summarize_communities`, `embed_communities`, `render_b2_community_summaries`, `community_facts` — 261 lines |
+| `src/specter/graph/enforcement_loader.py` | `load_enforcement_cases`, `infer_legal_status` — split out of `loader.py`, see Deviations |
+| `src/specter/graph/loader.py` | EDIT — `load_snapshot` now takes `settings` and calls `load_enforcement_cases`; 399 lines |
+| `src/specter/graph/retrieval.py` | EDIT — real `global_()`/`semantic()`, `hybrid()` no longer gates on `AZURE_API_KEY` |
+| `src/specter/llm/prompt_compiler.py` | EDIT — `_community_summaries_block` reads `prompts/blocks/b2_community_summaries.md` |
+| `src/specter/core/contracts.py` | EDIT — `CommunityCharacterization`, `ScreeningThresholds.community_summary_cap` |
+| `config/screening.yaml` | EDIT — `thresholds.community_summary_cap: 40` |
+| `prompts/agents/community_summarizer.md` | agent role brief |
+| `prompts/blocks/b2_community_summaries.md` | generated, committed — 255 characterized communities, capped to top 40 shown |
+| `scripts/20_build_graph.py` | EDIT — passes `settings` to `load_snapshot` |
+| `scripts/30_build_communities.py` | EDIT — `--summaries`/`--embeddings`/`--limit` flags; regenerates B2 |
+| `tests/test_summaries.py` | CREATE — 5 offline-safe-but-Neo4j-backed tests |
+| `tests/test_graph_retrieval.py` | EDIT — `global_`/`semantic`/`hybrid` now assert real shape, not the old "empty without a key" behavior |
+| `tests/test_graph_tools.py` | EDIT — `search_enforcement_cases` test updated for the real loaded case (see Deviations) |
+| `NOTES_API_DEVIATIONS.md` | D11 (embedding response shape), D12 (vector-write Cypher form) |
 
-**Inherited context.**
+**Checkpoint — passed, against the live graph (not a fixture).**
 
-- Embeddings are confirmed working: `text-embedding-3-large` via
-  `openai/<deployment>` + `api_base`, returning **3072 dims** — which already
-  matches the `case_embedding` and `community_embedding` vector indexes
-  declared in `graph/schema.cypher`. Do not change the dimensions.
-- 255 `Community` nodes and 3,469 `IN_COMMUNITY` edges already exist from
-  `scripts/30_build_communities.py`. Leiden is seeded (`RANDOM_SEED`) and
-  `community_id` is a hash of sorted member NPIs, so IDs are stable across
-  runs — you can rely on that for idempotent writes.
-- `CommunitySummary` already exists in `core/contracts.py` with
-  `characterization`, `notable_members`, `risk_themes`, `generated_at`,
-  `prompt_version` all optional. `graph_tools.get_community_context` already
-  reads it back. **Note:** it is a plain `SpecterModel`, not an `AgentOutput` —
-  if you use it directly as an agent `output_schema`, its optional fields
-  carry defaults and Azure strict mode will 400. Define a separate
-  strict-mode-safe schema for the LLM call and map it onto `CommunitySummary`
-  for storage.
-- `summarize_community` is already routed to `T1_workhorse` in
-  `config/models.yaml`. Do not add a new `task_class`.
-- **`EnforcementCase` count is 0 and the DOJ snapshot has exactly 1 row**
-  (debt D-2). Build the loader properly anyway; it is correct with 1 row and
-  will be correct with 400 after M7 refills the source. Say plainly in your
-  checkpoint that semantic retrieval is exercised against a 1-row corpus.
+```
+pytest tests/ -q                      141 passed
+ruff check src/ tests/ scripts/       All checks passed
+mypy src/                             Success: no issues in 40 source files
 
-**File manifest.**
+MATCH (c:Community) WHERE c.embedding IS NOT NULL RETURN count(*)        → 255
+MATCH (c:Community) WHERE c.characterization IS NOT NULL RETURN count(*) → 255
+MATCH (c:EnforcementCase) RETURN count(*)                                → 1
+MATCH (c:EnforcementCase) WHERE c.embedding IS NOT NULL RETURN count(*)  → 1
+MATCH (:Provider)-[r]->(:EnforcementCase) RETURN count(r)                → 0
 
-| Path | Action | Notes |
-|---|---|---|
-| `src/specter/graph/embeddings.py` | CREATE | ~90 lines. Batch embed via litellm; write vectors to nodes. |
-| `src/specter/graph/summaries.py` | CREATE | ~180 lines. Deterministic fact block → T1 call → `CommunitySummary` → persist + embed. |
-| `src/specter/graph/loader.py` | EDIT | Add `load_enforcement_cases()` only. Leave everything else alone. |
-| `src/specter/graph/retrieval.py` | EDIT | Implement `global_()` and `semantic()`; `hybrid()` gating. |
-| `src/specter/llm/prompt_compiler.py` | EDIT | `_community_summaries_block` reads real summaries. |
-| `src/specter/core/contracts.py` | EDIT | Add the strict-mode LLM schema for community summarization. |
-| `scripts/30_build_communities.py` | EDIT | Add `--summaries` / `--embeddings` stages. |
-| `tests/test_graph_retrieval.py` | EDIT | Add `global_`/`semantic` cases. |
-| `tests/test_summaries.py` | CREATE | Determinism of the fact block; B2 stability. |
-
-**Read before writing.**
-
-- `src/specter/graph/retrieval.py` — all 107 lines, it is short.
-- `src/specter/graph/communities.py` — all 115 lines; mirror its write style.
-- `src/specter/graph/schema.cypher:81-90` — the two vector index definitions.
-- `src/specter/llm/prompt_compiler.py:73-92` — `_community_summaries_block`.
-- `src/specter/agents/_base.py:230-300` — how `run_agent` calls a model, if you
-  reuse it for summarization.
-- `src/specter/core/contracts.py:287-310` — `CommunitySummary`.
-- `NOTES_API_DEVIATIONS.md` D1, D5 — the call form and the strict-mode ban on
-  defaults.
-
-**Steps.**
-
-1. **`graph/embeddings.py`.** One function that batches text → vectors:
-
-   ```python
-   def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:
-       """text-embedding-3-large, 3072 dims. Batches of 64."""
-       response = litellm.embedding(
-           model=f"openai/{settings.azure_embedding_deployment}",
-           api_base=settings.azure_api_base,
-           api_key=settings.azure_api_key.get_secret_value(),
-           input=batch,
-       )
-   ```
-   Preserve input order — `response.data` is indexed by `index`; sort on it
-   rather than trusting arrival order. Assert `len(vector) == 3072` and raise
-   on mismatch (hard rule 7); a wrong-width vector fails at index-write time
-   with a confusing Neo4j error otherwise.
-
-   Write with `db.create.setNodeVectorProperty(node, 'embedding', $vector)`.
-
-2. **Deterministic community fact block** in `summaries.py`. One Cypher read
-   per community producing: member count, distinct shared addresses, distinct
-   shared officers, enumeration date range (min/max), excluded-member count,
-   state spread. Emit as a **sorted** list of plain strings — this is
-   `structural_facts`, and it is what the LLM is forbidden to alter. This
-   function must be pure-deterministic and independently testable without an
-   LLM.
-
-3. **The LLM call.** `summarize_community` at T1, one call per community.
-   Strict-mode-safe output schema (no defaults):
-
-   ```python
-   class CommunityCharacterization(AgentOutput):
-       characterization: str      # <= 3 sentences
-       notable_members: list[str] # NPIs — must exist in the graph
-       risk_themes: list[str]
-   ```
-   Validate `notable_members` against the actual member NPI list and **drop
-   or raise on** any NPI the model invented (hard rule 2). Do not trust it.
-
-4. **Persist.** Write `characterization`, `risk_themes`, `notable_members`,
-   `generated_at`, `prompt_version` onto the `Community` node, then embed
-   `characterization + " " + " ".join(risk_themes)` into
-   `community_embedding`.
-
-5. **`load_enforcement_cases()` in `loader.py`.** Read
-   `data/snapshot/doj/data.parquet` → `EnforcementCase` nodes carrying
-   `case_id`, `title`, text, `legal_status`, `data_origin`, `source_id`. Then
-   embed the case text into `case_embedding`. **Do not create edges to
-   Providers** — matching a release to a provider is an entity-resolution
-   judgement and belongs to the Enforcement agent (M3), not a loader. The
-   existing module docstring already says this; keep it true.
-
-6. **`retrieval.global_()` and `.semantic()`.** Embed the query, then:
-
-   ```cypher
-   CALL db.index.vector.queryNodes('community_embedding', $k, $vector)
-   YIELD node, score
-   ```
-   Return `RetrievalResult(mode="global"|"semantic", ...)` with per-item
-   `source_ids`. Keep the existing behaviour of degrading gracefully — but
-   now degrade only when the *index is empty*, and log which. Do not keep the
-   blanket "AZURE_API_KEY not configured" guard in `hybrid()`; the key is
-   configured now, and that check would keep the global layer permanently off.
-
-7. **B2.** `_community_summaries_block` reads persisted summaries and renders
-   them **sorted by `community_id`**, via `json.dumps(..., sort_keys=True)`.
-   *This is above the cache boundary* — it must contain no timestamp, no
-   score, no iteration-order dependence. **Cap the number included** (suggest
-   top 40 by member count, then sorted by id, with the cap in
-   `config/screening.yaml`): all 255 would add roughly 20k tokens to every
-   single call. State the cap in the block text so the model knows the list is
-   partial.
-
-8. Regenerate B0 if any tool signature changed:
-   `python scripts/05_generate_prompt_blocks.py`.
-
-**Checkpoint.**
-
-```bash
-docker compose up -d
-python scripts/20_build_graph.py                 # if the graph needs rebuilding
-python scripts/30_build_communities.py --summaries --embeddings
-python -m pytest tests/ -q
-ruff check src/ tests/ scripts/ && mypy src/
+GraphRetriever.global_("shell provider address cluster", k=5)
+  → mode=global, 5 items, all item_type=Community, all source_ids non-empty
+GraphRetriever.hybrid(sample_npi, "shell provider pattern")
+  → local: 50 items, hybrid: 56 items — strictly more, confirmed live
+test_prompt_compiler.py — all 7 tests (the 4 invariants + 3 more) pass
+0 fabricated `notable_members` dropped across all 255 summarization calls
 ```
 
-Expected, concretely:
+**Key decisions, and why.**
 
-- Neo4j: `MATCH (c:Community) WHERE c.embedding IS NOT NULL RETURN count(*)`
-  → **255**.
-- Neo4j: `MATCH (e:EnforcementCase) RETURN count(*)` → **≥ 1** (1 today; say
-  so).
-- `GraphRetriever.global_("shell provider address cluster", k=5)` returns
-  **5** items with `mode="global"`, each with non-empty `source_ids`.
-- `hybrid()` on a real NPI returns strictly more items than `local()` alone.
-- `PromptCompiler.compile(...).prefix_fingerprint` is **stable across two
-  compilations** and B2 now contains real summary text (the four invariant
-  tests in `test_prompt_compiler.py` still pass).
-- Whole suite green; ruff and mypy clean.
+1. **B2 is a generated, committed file, not something `PromptCompiler`
+   queries live.** `PromptCompiler` has no Neo4j driver and must stay
+   offline-constructible (the four cache invariants are tested without a
+   live graph). `scripts/30_build_communities.py` renders
+   `prompts/blocks/b2_community_summaries.md` from the graph — same pattern
+   as B0 — and `_community_summaries_block` just reads it, stamping its own
+   `graph_version` into the header at read time so that field never goes
+   stale relative to the file.
 
-**Traps.**
+2. **`summarize_communities()` and `embed_communities()` are separate
+   functions, not one.** Different cost/failure profiles: 255 T1 chat calls
+   are the real money and time; embedding calls are cheap. Splitting them
+   lets `scripts/30_build_communities.py --embeddings` alone re-embed after a
+   characterization edit without re-paying for the LLM call, and lets
+   `--summaries --limit N` develop cheaply before committing to the full run.
 
-- **Changing B2 changes the cached prefix, once.** Expect a one-time 0%
-  cache hit run afterwards. That is correct and expected — do not "fix" it.
-  What is *not* acceptable is a prefix that differs between two compilations
-  in the same run; `test_prefix_is_deterministic` catches that.
-- **255 T1 calls cost real money.** Add a `--limit` flag and develop against
-  10 communities before running the full set. The L1 cache will absorb
-  re-runs only if the fact block is byte-identical, which is exactly why
-  step 2 must be deterministic.
-- **`CommunitySummary` has defaulted optional fields** and will 400 under
-  Azure strict mode if used directly as `output_schema`. Use a separate LLM
-  schema (step 3). This is the single most likely way to lose an hour here.
-- **Neo4j vector index writes need
-  `db.create.setNodeVectorProperty`** — assigning `SET n.embedding = $v`
-  directly stores a plain list that the index will not pick up.
-- **`response.data` ordering.** litellm returns objects carrying an `index`;
-  sort by it. Assuming arrival order silently mis-assigns every embedding,
-  and nothing will fail loudly — retrieval just returns nonsense.
-- The DOJ corpus is 1 row. `semantic()` returning 1 hit is correct, not a
-  bug. Do not pad it, and do not weaken the test to hide it.
+3. **`EnforcementCase.legal_status` comes from a regex keyword heuristic in
+   the loader, not an LLM call.** A loader has no business calling an LLM —
+   that's M3's `extract_enforcement_case` agent's job. The heuristic
+   defaults to `alleged` (the weakest claim) on no match, so it never
+   overclaims even though it's crude. Tracked as debt D-10 for M3 to
+   properly adjudicate.
 
-**Definition of done.**
+4. **`graph/loader.py` split into `graph/loader.py` +
+   `graph/enforcement_loader.py`.** Adding `load_enforcement_cases` in place
+   pushed `loader.py` to 503 lines, over CLAUDE.md's 400-line ceiling. Per
+   BUILD_MILESTONES.md §0.2 ("CLAUDE.md wins" when it conflicts with an
+   Action Plan), split rather than left oversized — a deviation from the
+   Action Plan's literal file manifest (which said "EDIT `loader.py`" with no
+   new file), noted here rather than silently done.
 
-- [ ] `graph/embeddings.py` and `graph/summaries.py` exist, ≤ 400 lines each
-- [ ] 255 `Community` nodes carry a 3072-dim `embedding` and a
-      `characterization`
-- [ ] `EnforcementCase` nodes loaded and embedded; no Provider edges created
-- [ ] `retrieval.global_()` and `.semantic()` return real, cited results
-- [ ] `hybrid()` genuinely merges all three modes and deduplicates
-- [ ] B2 contains real, sorted, capped summaries; all four prompt-compiler
-      invariants still pass
-- [ ] `pytest` / `ruff` / `mypy` all clean
-- [ ] §3 Current State and §4 Carried Debt updated; M3 Action Plan written
-- [ ] Committed as `M2: graph RAG completion`
+**Deviations from the Action Plan — say so plainly.**
+
+- **The full 255-community run, not a `--limit` dev sample.** The Action
+  Plan's Definition of Done required all 255 to carry both `embedding` and
+  `characterization`; its own Traps section warned "255 T1 calls cost real
+  money, develop against `--limit`." Both are true at once — developing
+  cheap and *shipping* the full run are different steps. Asked the operator
+  explicitly before spending; they chose the full run.
+- **`scripts/20_build_graph.py` and `load_snapshot()` needed `settings`
+  threaded through, not just `graph/loader.py` edited in isolation.** The
+  Action Plan's file manifest didn't list either, but `load_enforcement_cases`
+  needs `Settings` to embed, and there was no other place for the checkpoint's
+  own "`EnforcementCase` count ≥ 1" requirement to be satisfied from — the
+  loader has to actually run somewhere. Minimal, unavoidable, one line each.
+- **`tests/test_graph_tools.py::test_search_enforcement_cases_empty_until_m5`
+  broke** once a real `EnforcementCase` node existed (correctly — it was
+  asserting the pre-M2 stub behavior). Not in the file manifest, but the
+  failure is a direct, intended consequence of this milestone's own change,
+  not an unrelated bug — fixed and renamed rather than left red.
+
+**Things the next session must not get wrong.**
+
+- **`get_community_context` (both the `graph_tools.py` function and the
+  `tools/bindings.py` binding over it) does not read the characterization
+  M2 just paid for.** It recomputes `structural_facts` fresh every call and
+  always returns `characterization=None`. Real gap, not a false alarm — see
+  §3's "Known gap" callout and debt D-9.
+- **`GraphRetriever` isn't exposed as an agent tool binding.** Plan §9.4 says
+  Graph Investigation should call `retriever.hybrid()`; `tools/bindings.py`
+  only wraps `graph_tools`/`signal_tools`/`entity_tools`/`evidence_tools`
+  functions today. M3 needs to decide whether to add a `hybrid_search`
+  binding or route through something else — this wasn't decided in M2.
+- **`db.create.setNodeVectorProperty` works fine directly inside `UNWIND`** —
+  no `CALL { ... }` subquery wrapper needed on Neo4j 5.26. Verified live;
+  see `NOTES_API_DEVIATIONS.md` D12.
+- **`litellm.embedding()`'s `response.data` items are dicts** (`item["index"]`,
+  `item["embedding"]`), not attribute-access objects, on this deployment.
+  See D11.
 
 ---
 
@@ -605,7 +554,301 @@ consumer, with the no-fabricated-numbers check enforced in
 
 #### Action Plan
 
-*(not yet written — the M2 session writes this)*
+**Goal.** Three working investigation agents that turn deterministic
+graph/signal output into structured findings — the first agents in the
+system that actually reason over evidence rather than just gate on it
+(`data_quality`, M1) or summarize it (`community_summarizer`, M2). Also
+lands ZIP-centroid geocoding (Amendment 3) so `geographic_spread` fires on
+real data for the first time, and wires the escalation path `router.py`
+already supports but `run_agent` has never called. Plan §9.3–9.5.
+
+**Inherited context — read this before touching anything.**
+
+- **Every tool these agents need already exists and is already bound.**
+  `tools/bindings.build_tool_bindings(driver, thresholds, evidence_dir)`
+  returns all 19 model-facing tools — `graph_tools.*`, `signal_tools.*`
+  (via `signal_bindings.build_signal_bindings`), `entity_tools.*`
+  (including `propose_entity_matches`), and `evidence_tools.validate_citations`.
+  None of the three M3 agents should need a new binding *except* the two new
+  geocoding functions (Step 1) and, if you take that route,
+  `GraphRetriever.hybrid()` (see next bullet). Pass each agent the exact
+  subset of `build_tool_bindings()`'s return list it needs — plan §9.4 gives
+  Graph Investigation "all of `graph_tools`, all of `signal_tools`"; Entity
+  Resolution needs `propose_entity_matches` + `name_similarity`; Enforcement
+  Intelligence needs `search_enforcement_cases`. Filter by function identity
+  or `__name__`, and regenerate B0
+  (`python scripts/05_generate_prompt_blocks.py`) only if you add a genuinely
+  new tool — filtering an existing agent's tool *list* doesn't change B0
+  itself (B0 is generated from the full binding set, not per-agent).
+- **`GraphRetriever` (M2) is not in `tools/bindings.py`.** Plan §9.4 wants
+  Graph Investigation to call `retriever.hybrid()`. Nothing wraps
+  `GraphRetriever` as a model-facing tool yet. Decide once, in this
+  milestone: either add a `hybrid_search(npi, query, k)` binding (mirrors
+  the existing bindings' style — closes over `driver`/`settings`, returns a
+  plain dict) or give Graph Investigation a Python-side pre-fetch step that
+  calls `hybrid()` before the agent runs and puts the result straight into
+  the evidence bundle (same pattern as `data_quality.build_evidence`, no new
+  tool at all). The second is less code and keeps hard rule 1 structurally
+  true the same way `data_quality` does — it has a query, but not a *choice*
+  of when to call it. Recommended.
+- **`tools/graph_tools.get_community_context` doesn't read M2's persisted
+  characterization** (debt D-9). If Graph Investigation calls this tool (or
+  the `get_community_context` binding) expecting real narrative context, it
+  gets `characterization: null` back — always, on every community, even
+  though all 255 have one on the node. Fix `graph_tools.py:142-168` to also
+  `RETURN cm.characterization, cm.notable_members, cm.risk_themes,
+  cm.generated_at, cm.prompt_version` and populate `CommunitySummary`'s
+  optional fields from them, falling back to the current always-fresh
+  `structural_facts` computation either way (that part is still correct and
+  still needed — characterization can be stale or absent, structural facts
+  never are). This is now in scope for M3 since M3 is the first real
+  consumer; do it as its own small step, don't let it hide inside a bigger
+  diff.
+- **`EnforcementCase.legal_status` in the graph today is a regex guess**
+  (debt D-10, `graph/enforcement_loader.infer_legal_status`), not a real
+  adjudication. `extract_enforcement_case`'s whole job is to replace that
+  guess with the real thing for any case it actually matches to a provider —
+  don't be surprised the seed value looks low-effort, that's intentional.
+- **Escalation (`router.should_escalate`) takes a `pydantic.BaseModel`, not a
+  dict**, and reads fields off it via `getattr` (`llm/router.py:187-198`,
+  `_conditions_match`). `agents/_base.run_agent` currently only ever
+  produces a `dict` (`_parse_output` calls `.model_dump(mode="json")`
+  immediately) — there is no point in the current flow where a validated
+  model instance survives long enough to call `should_escalate` against it.
+  You will need to keep the parsed model instance around (not just its dump)
+  through the point where you decide whether to escalate, then dump it after.
+  This is the single most likely place to lose time in this milestone — see
+  Steps 2 and Traps.
+- Escalation rules already exist and don't need editing:
+  `config/models.yaml`'s `escalation:` block routes
+  `adjudicate_entity_match` with `match_probability` in `[0.45, 0.65]` to
+  `T2_reasoning`, and any `schema_validation_failed: true` result
+  (`task_class: null`, i.e. applies to all three new agents) to
+  `T2_reasoning` as well, both with `max_retries: 1`.
+- ZCTA centroid data does **not** exist in this repo yet and is not
+  fetchable through any tool already wired up — you need outbound internet
+  access (`WebFetch`/`curl`) to pull the Census Bureau's 2020 ZCTA Gazetteer
+  file. It's a public-domain, no-key TSV
+  (`https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2020_Gazetteer/2020_Gazetteer_zcta_national.zip`
+  as of plan-writing time — Census URLs move, so verify before hardcoding
+  anything into a script, and record whatever URL actually worked). Columns
+  you need out of it: `GEOID` (→ `zip5`), `INTPTLAT`, `INTPTLONG` (→
+  `lat`/`lon`); `state` is not in that file — Phase 1 doesn't strictly need
+  it (CLAUDE.md's column list includes it, `entity_tools.py`'s callers don't
+  currently use it) but keep it if a source column is cheaply available, and
+  say plainly in this milestone's write-up if you drop it.
+
+**File manifest.**
+
+| Path | Action | Notes |
+|---|---|---|
+| `data/reference/zcta_centroids.csv` | CREATE | ~33k rows, `zip5,lat,lon,state`. Committed, not fetched at runtime. |
+| `src/specter/tools/entity_tools.py` | EDIT | Add `zip_centroid()`, `haversine_km()`. Leave existing functions alone. |
+| `src/specter/tools/signal_tools.py` | EDIT | Rewrite `geographic_spread` to use ZIP centroids instead of `p.latitude`/`p.longitude`. |
+| `src/specter/tools/graph_tools.py` | EDIT | `get_community_context` reads persisted characterization (debt D-9). |
+| `src/specter/agents/_base.py` | EDIT | `run_agent` calls `router.should_escalate` and retries once at the escalated tier. |
+| `src/specter/agents/entity_resolution.py` | CREATE | T1 `adjudicate_entity_match`. |
+| `src/specter/agents/graph_investigation.py` | CREATE | T1 `narrate_graph_signal`. |
+| `src/specter/agents/enforcement_intel.py` | CREATE | T1 `extract_enforcement_case`. |
+| `src/specter/core/contracts.py` | EDIT | `EntityMatchAdjudication`, `GraphFindings`, `EnforcementFindings` (all `AgentOutput`, no defaults). |
+| `src/specter/tools/bindings.py` | EDIT | Only if you add `hybrid_search`; otherwise untouched. |
+| `prompts/agents/entity_resolution.md` | CREATE | |
+| `prompts/agents/graph_investigation.md` | CREATE | |
+| `prompts/agents/enforcement_intel.md` | CREATE | |
+| `tests/test_entity_tools.py` | EDIT or CREATE | `zip_centroid`/`haversine_km` unit tests — pure functions, no Neo4j needed. |
+| `tests/test_signal_tools.py` | EDIT | `geographic_spread` test against real ZIP data instead of the near-empty `latitude`/`longitude` path. |
+| `tests/test_agent_base.py` | EDIT | Escalation test: an agent output that trips a rule actually re-runs at the escalated tier with `escalated=True`. |
+| `tests/test_entity_resolution.py`, `test_graph_investigation.py`, `test_enforcement_intel.py` | CREATE | Mirror `test_agent_base.py`'s offline style — you likely cannot afford a live-LLM test per agent per session; at minimum test evidence-building and output-schema validation offline. |
+
+**Read before writing.**
+
+- `src/specter/agents/data_quality.py` — the only existing agent; every new
+  agent should look structurally like it (evidence builder function +
+  `build_agent`/`run_agent` call), not reinvent the shape.
+- `src/specter/agents/_base.py:236-395` (`run_agent`, `_parse_output`) — where
+  escalation has to slot in.
+- `src/specter/llm/router.py:143-198` — `resolve`, `should_escalate`,
+  `_conditions_match`. Note `_conditions_match` returns `False` (not an
+  error) if the result model lacks the condition's field — an escalation
+  rule silently never fires if your output schema's field name doesn't match
+  `config/models.yaml` exactly (`match_probability`).
+- `src/specter/tools/entity_tools.py` — full file, 221 lines; `propose_entity_matches`
+  and `MatchProposal` are what Entity Resolution adjudicates.
+- `src/specter/tools/signal_tools.py:201-235` — current (unused-on-real-data)
+  `_haversine_km`/`geographic_spread`, to replace.
+- `src/specter/tools/bindings.py` — full file, to see the binding style and
+  decide the `hybrid_search` question.
+- `src/specter/core/contracts.py:212-225` (`RiskSignal`), `:317-332`
+  (`MatchProposal`) — the deterministic inputs these agents narrate over.
+- `phase_1_build_plan.md` §9.3, §9.4, §9.5 — the three agents' exact
+  contracts and tool lists as originally specified (§9.5 mentions SAM.gov and
+  Playwright MCP; both are out of scope here — SAM.gov per Amendment 1,
+  Playwright per M7 — so Enforcement Intelligence in this milestone only gets
+  `search_enforcement_cases`, no live web search yet).
+
+**Steps.**
+
+1. **ZCTA geocoding first — it's self-contained and has no LLM dependency,**
+   so get it working and tested before touching agents. Fetch the Census
+   Gazetteer file, extract `zip5,lat,lon,state` into
+   `data/reference/zcta_centroids.csv`, commit it. In `entity_tools.py`:
+
+   ```python
+   def zip_centroid(zip5: str) -> tuple[float, float] | None:
+       """ZCTA centroid lookup. None for unmatched ZIPs (PO-box-only and
+       military ZIPs have no ZCTA) — that's a valid result, not an error."""
+
+   def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+       """Great-circle distance. Pure function, no I/O."""
+   ```
+   Load the CSV once at module import or lazily-cached — not per call.
+   Rewrite `signal_tools.geographic_spread` to pull `zip5` off each
+   officer-linked provider's `Address` node (already in the graph, unlike
+   `latitude`/`longitude`) via `zip_centroid`, and compute max pairwise
+   `haversine_km` the same way the old code did with lat/lon. Every org
+   whose ZIP doesn't resolve (`zip_centroid` returns `None`) drops out of the
+   pairwise comparison, not out of the provider — if *any* org's ZIP is
+   unmatched, still emit the signal (computed from the orgs that did
+   resolve) with `confidence` reduced and
+   `known_limitations: ["incomplete_geocoding"]`; never substitute a guessed
+   coordinate (CLAUDE.md Amendment 3, verbatim). Every signal from this
+   detector also carries `known_limitations: ["centroid_precision_only",
+   "not_street_level"]` and a `geocoding_method: "zcta_centroid"` — check
+   `RiskSignal`'s current fields in `contracts.py:212-225`; it may need a
+   `known_limitations: list[str]` field added if it isn't there already
+   (verify, don't assume — the M1/M2 sessions didn't need this field on
+   `RiskSignal`, but Amendment 3 requires it here).
+
+2. **Wire escalation in `agents/_base.py` before writing the three agents**,
+   so each new agent gets it for free rather than three sessions each
+   reinventing a retry loop. In `run_agent`, after `_parse_output` succeeds:
+   parse into the model instance (don't immediately dump), call
+   `runtime.router.should_escalate(task_class, parsed_model)`; if it returns
+   a `TierConfig`, re-run the same evidence through a *second* `LlmAgent`
+   built at that tier (reuse `build_agent` with the escalated `task_class`'s
+   tier — check whether `build_agent` needs a tier override parameter, since
+   today it derives the tier from `task_class` via `router.resolve`, not a
+   direct tier argument), cap at one retry
+   (`EscalationRule.max_retries`, already 1 everywhere in
+   `config/models.yaml`), and return `AgentRunResult(escalated=True, ...)`
+   with the escalated call's tokens/model. If the escalated call also fails
+   schema validation, do not loop again — raise `AgentOutputError`, per hard
+   rule 7.
+
+3. **`agents/entity_resolution.py`.** Evidence: `propose_entity_matches`
+   output for a given NPI + candidate list (candidates come from
+   `find_shared_attribute_peers` — an entity can only be a match candidate if
+   it already shares *something* with the target). Output schema
+   (`AgentOutput`, no defaults):
+
+   ```python
+   class EntityMatchAdjudication(AgentOutput):
+       npi: str
+       candidate_npi: str
+       matching_features: list[str]
+       conflicting_features: list[str]
+       match_probability: float          # 0.0-1.0
+       decision: MatchDecision           # auto_link | agent_review | human_review | reject
+   ```
+   `MatchDecision` already exists in `core/enums.py`. Bias conservative per
+   plan §9.3 — false merges are worse than missed matches; say so in the
+   instruction brief, not just in code comments.
+
+4. **`agents/graph_investigation.py`.** Evidence: whatever Step 1's
+   `hybrid_search` decision produced, plus every `RiskSignal` the detectors
+   fire for the NPI, plus (once Step 0's D-9 fix lands) real community
+   context.
+
+   ```python
+   class GraphFindings(AgentOutput):
+       signals: list[RiskSignal]         # echoed back, not re-derived
+       community_context: str            # narration, not a number
+       narration: str
+       linked_entities: list[str]        # NPIs/officer_ids/etc. mentioned
+   ```
+   `after_model_callback` (plan §9.4, hard rule 1): extract every numeric
+   literal from `narration`/`community_context` via regex, assert each
+   appears in a tool result already gathered for this call. On violation,
+   quote it back and retry once; a second violation raises (mirrors the
+   judge's own numeric-grounding check design in `CLAUDE.md` Amendment 2 —
+   consistent, not coincidental).
+
+5. **`agents/enforcement_intel.py`.** Evidence: `search_enforcement_cases`
+   hits for a query built from the provider's name/state/taxonomy.
+
+   ```python
+   class EnforcementFindings(AgentOutput):
+       matches: list[str]                # case_ids, must exist in the graph
+       typologies: list[str]
+       legal_status_per_match: dict[str, LegalStatus]
+       disambiguation_flags: list[str]   # case_ids needing human review
+   ```
+   Any match built on a common-name hit (no NPI, no exact identifier overlap
+   — same "no auto-link without an exact identifier" rule as CLAUDE.md
+   Amendment 1's state-exclusion matching) goes in
+   `disambiguation_flags`, never silently into `matches` as settled.
+
+6. Regenerate B0 only if you added `hybrid_search`:
+   `python scripts/05_generate_prompt_blocks.py`.
+
+**Checkpoint.**
+
+```bash
+docker compose up -d
+python -m pytest tests/ -q
+ruff check src/ tests/ scripts/ && mypy src/
+python3 -c "from specter.tools.entity_tools import zip_centroid; print(zip_centroid('33132'))"
+```
+Expected: pytest green including the new offline agent tests; the ZIP lookup
+prints a real `(lat, lon)` tuple. Then, against a real NPI known to have
+shared-officer peers with non-null ZIPs, run each agent once live and paste
+its output — `match_probability`/`decision` for entity_resolution,
+`narration` with zero numbers absent from its tool calls for
+graph_investigation, `legal_status_per_match` using the real enum for
+enforcement_intel. Confirm `AgentRunResult.escalated` is `True` at least once
+by deliberately constructing a case that trips the `match_probability` rule
+(handed a pair with 0.45–0.65 features).
+
+**Traps.**
+
+- **`should_escalate` needs a `BaseModel`, current `run_agent` only ever
+  keeps a `dict`.** This is not a small edit — trace the type all the way
+  from `_parse_output` through to the return statement before writing code.
+- **`_conditions_match` fails silently (returns `False`) on a field-name
+  typo**, not an error. If your escalation test never escalates, check the
+  field name in `config/models.yaml` against your output schema field name
+  character-for-character before suspecting the router logic.
+- **Census ZCTA files are large and the exact current URL is not verified
+  yet** — budget time for it to have moved. Verify what you actually
+  downloaded before committing 33k rows of possibly-wrong data; spot-check a
+  few known ZIPs (e.g. Miami 33132, LA 90001) against known coordinates.
+- **`get_community_context`'s fix is easy to scope-creep.** It's one query
+  edit (read four more properties, map them onto already-optional
+  `CommunitySummary` fields) — resist rewriting the function's structural
+  facts logic while you're in there; that part isn't broken.
+- **Playwright MCP and grounded research don't exist yet** (M7, M4). Don't
+  reach for them even though plan §9.5/§9.6 mention them — Enforcement
+  Intelligence in this milestone is `search_enforcement_cases` only, against
+  a 1-row corpus (debt D-2). Say so plainly in the checkpoint, same as M2
+  did for `semantic()`.
+
+**Definition of done.**
+
+- [ ] `zip_centroid()`/`haversine_km()` exist, tested, and `geographic_spread`
+      uses them instead of the near-always-null lat/lon fields
+- [ ] `run_agent` calls `router.should_escalate` and a real escalation
+      (agent output → re-run at higher tier → `escalated=True`) is
+      demonstrated live, not just asserted in a mock
+- [ ] Three new agents exist, each with a strict-mode-safe `AgentOutput`
+      schema, each following `data_quality.py`'s evidence-builder pattern
+- [ ] `get_community_context` returns real characterization when one exists
+      (debt D-9 cleared)
+- [ ] `graph_investigation`'s `after_model_callback` rejects a fabricated
+      number at least once in a test
+- [ ] `pytest` / `ruff` / `mypy` all clean
+- [ ] §3 Current State and §4 Carried Debt updated; M4 Action Plan written
+      (note M4 is blocked on `GOOGLE_CLOUD_PROJECT` regardless)
+- [ ] Committed as `M3: investigation agents`
 
 ---
 

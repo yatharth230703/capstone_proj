@@ -2,10 +2,12 @@
 automatically if Neo4j isn't reachable, so the rest of the suite stays fast
 and offline.
 
-`global_()`/`semantic()` need Azure embeddings, not configured yet — covered
-here only for their documented degrade-gracefully behavior, not real vector
-search (that's follow-up work once AZURE_API_KEY/AZURE_EMBEDDING_DEPLOYMENT
-are set).
+`global_()`/`semantic()` hit the live Azure embedding deployment and the
+`community_embedding`/`case_embedding` vector indexes. Assertions here only
+check result *shape* (mode, item_type, source_ids, no raw embedding leaking
+into `data`), not hit counts — those depend on how far
+`scripts/30_build_communities.py --summaries --embeddings` has been run,
+which is out of this test's control.
 """
 
 from __future__ import annotations
@@ -67,17 +69,30 @@ def test_local_unknown_npi_returns_empty(driver: Driver) -> None:
     assert result.items == []
 
 
-def test_global_and_semantic_degrade_gracefully(driver: Driver) -> None:
+def test_global_returns_structurally_valid_results(driver: Driver) -> None:
     retriever = GraphRetriever(driver)
-    global_result = retriever.global_("shell providers at residential addresses")
-    semantic_result = retriever.semantic("durable medical equipment fraud")
-    assert global_result.items == []
-    assert semantic_result.items == []
+    result = retriever.global_("shell providers at residential addresses", k=5)
+    assert result.mode == "global"
+    assert len(result.items) <= 5
+    for item in result.items:
+        assert item.item_type == "Community"
+        assert item.source_ids
+        assert "embedding" not in item.data
 
 
-def test_hybrid_falls_back_to_local_only_without_azure_key(driver: Driver, sample_npi: str) -> None:
+def test_semantic_returns_structurally_valid_results(driver: Driver) -> None:
+    retriever = GraphRetriever(driver)
+    result = retriever.semantic("durable medical equipment fraud", k=10)
+    assert result.mode == "semantic"
+    for item in result.items:
+        assert item.item_type == "EnforcementCase"
+        assert item.source_ids
+        assert "embedding" not in item.data
+
+
+def test_hybrid_merges_local_global_and_semantic(driver: Driver, sample_npi: str) -> None:
     retriever = GraphRetriever(driver)
     result = retriever.hybrid(sample_npi, "shell provider pattern")
     assert result.mode == "hybrid"
     local_only = retriever.local(sample_npi)
-    assert len(result.items) <= len(local_only.items)
+    assert len(result.items) >= len(local_only.items)
