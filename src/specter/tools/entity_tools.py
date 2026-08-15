@@ -11,9 +11,13 @@ street_type_abbrev|zip5`. Unit/suite is deliberately excluded from the key.
 
 from __future__ import annotations
 
+import math
 import re
+from functools import lru_cache
+from pathlib import Path
 
 import phonenumbers
+import polars as pl
 import structlog
 import usaddress
 from neo4j import Driver
@@ -22,6 +26,11 @@ from rapidfuzz import fuzz
 from specter.core.contracts import MatchProposal, NormalizedAddress
 
 logger = structlog.get_logger(__name__)
+
+_ZCTA_CENTROIDS_PATH = (
+    Path(__file__).resolve().parents[3] / "data" / "reference" / "zcta_centroids.csv"
+)
+_EARTH_RADIUS_KM = 6371.0
 
 # USPS-style street-suffix abbreviations. Keys cover both the spelled-out and
 # already-abbreviated forms so "Street"/"St"/"St." all normalize the same way.
@@ -218,3 +227,31 @@ def propose_entity_matches(
                 )
             )
     return proposals
+
+
+@lru_cache(maxsize=1)
+def _zcta_centroids() -> dict[str, tuple[float, float]]:
+    """CLAUDE.md Amendment 3: committed ZCTA centroid table, loaded once and
+    cached — not fetched at runtime. ~33.8k rows, source: US Census Bureau
+    ZCTA Gazetteer file (public domain, no key).
+    """
+    frame = pl.read_csv(_ZCTA_CENTROIDS_PATH, schema_overrides={"zip5": pl.Utf8})
+    return {row["zip5"]: (row["lat"], row["lon"]) for row in frame.iter_rows(named=True)}
+
+
+def zip_centroid(zip5: str) -> tuple[float, float] | None:
+    """ZCTA centroid lookup. Returns None for unmatched ZIPs (PO-box-only
+    and military ZIPs have no ZCTA). None is a valid result, not an error.
+    """
+    return _zcta_centroids().get(zip5)
+
+
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance. Pure function, no I/O."""
+    lat1, lon1 = a
+    lat2, lon2 = b
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    x = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return _EARTH_RADIUS_KM * 2 * math.asin(math.sqrt(x))

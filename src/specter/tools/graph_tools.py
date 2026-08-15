@@ -140,6 +140,13 @@ def shortest_path_to_exclusion(
 
 
 def get_community_context(driver: Driver, npi: str) -> CommunitySummary | None:
+    """Structural facts are always recomputed fresh from Cypher — they never
+    go stale. `characterization`/`notable_members`/`risk_themes` are read
+    alongside them from the Community node's persisted properties (written by
+    `graph/summaries.summarize_communities`, M2); they are `None`/empty when
+    a community hasn't been characterized yet, which is a valid state, not
+    a bug (debt D-9).
+    """
     with driver.session() as session:
         record = session.run(
             """
@@ -150,7 +157,12 @@ def get_community_context(driver: Driver, npi: str) -> CommunitySummary | None:
                  count(DISTINCT CASE WHEN (member)-[:EXCLUDED_BY]->(:Exclusion)
                                       THEN member END) AS excluded_count
             RETURN cm.community_id AS community_id, size(members) AS member_count,
-                   excluded_count, [m IN members | m.state] AS states
+                   excluded_count, [m IN members | m.state] AS states,
+                   cm.characterization AS characterization,
+                   cm.notable_members AS notable_members,
+                   cm.risk_themes AS risk_themes,
+                   cm.generated_at AS generated_at,
+                   cm.prompt_version AS prompt_version
             """,
             npi=npi,
         ).single()
@@ -165,6 +177,11 @@ def get_community_context(driver: Driver, npi: str) -> CommunitySummary | None:
     return CommunitySummary(
         community_id=record["community_id"], member_count=record["member_count"],
         structural_facts=structural_facts,
+        characterization=record["characterization"],
+        notable_members=record["notable_members"] or [],
+        risk_themes=record["risk_themes"] or [],
+        generated_at=record["generated_at"],
+        prompt_version=record["prompt_version"],
     )
 
 

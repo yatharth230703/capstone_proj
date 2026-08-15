@@ -160,7 +160,13 @@ class ModelRouter:
         `max_completion_tokens`, not `max_tokens`). Pick one place — see
         NOTES_API_DEVIATIONS.md.
         """
-        tier_name = self._tier_name_for(task_class)
+        return self.model_for_tier(self._tier_name_for(task_class))
+
+    def model_for_tier(self, tier_name: str) -> LiteLlm:
+        """Same cache as `model_for`, keyed directly on a tier name rather
+        than a `task_class`. Used for escalation (M3): the escalated call
+        runs at a tier the router didn't derive from `task_class` routing.
+        """
         if tier_name not in self._model_cache:
             tier = self._policy.tiers[tier_name]
             self._model_cache[tier_name] = LiteLlm(model=tier.model, **self._transport(tier))

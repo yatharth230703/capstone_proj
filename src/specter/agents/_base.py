@@ -1,6 +1,7 @@
-"""The one place agent wiring lives (plan §9). Every agent is built here so
-that routing, the cache boundary, the L1 response cache, the ledger, and the
-tracing attributes exist in exactly one implementation.
+"""Agent *construction* (plan §9): routing, the cache boundary, and the
+tracing/telemetry callbacks. Agent *invocation* — the L1 response cache, the
+ADK runner, output validation — lives in `_llm_call.py`; both stay under
+CLAUDE.md's 400-line module ceiling this way (M3 split them out of one file).
 
 **How the cache boundary maps onto ADK.** ADK 2.6.2 has a built-in primitive
 for this and we use it rather than hand-assembling messages:
@@ -19,19 +20,16 @@ this deployment: 0 cached tokens on the first call, 2,816/3,152 on the second.
 prefix means one warm cache entry serves every agent, instead of each agent
 paying its own cold call.
 
-**Where the L1 cache lives.** Deliberately *outside* ADK, in `run_agent`.
-Short-circuiting inside `before_model_callback` would still pay for session
-setup, request assembly, and event plumbing, and would bypass the response
-post-processing that parses `output_schema`. A whole-call cache belongs
-around the whole call.
+**Where the L1 cache lives.** Deliberately *outside* ADK, in
+`_llm_call._invoke`. Short-circuiting inside `before_model_callback` would
+still pay for session setup, request assembly, and event plumbing, and would
+bypass the response post-processing that parses `output_schema`. A
+whole-call cache belongs around the whole call.
 """
 
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,49 +38,27 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from opentelemetry import trace
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from specter.core.contracts import AgentRunResult, EvidenceBundle, LlmCallRecord, LlmResult
+from specter.agents._errors import AgentOutputError, PrefixInstabilityError
+from specter.agents._llm_call import (
+    _STATE_CACHED_TOKENS,
+    _STATE_COMPLETION_TOKENS,
+    _STATE_PREFIX_FINGERPRINT,
+    _STATE_PROMPT_TOKENS,
+    _invoke,
+)
+from specter.core.contracts import AgentRunResult, EvidenceBundle, TierConfig
 from specter.core.enums import CacheLayer
-from specter.core.errors import SpecterError
-from specter.llm.ledger import CostLedger, compute_cost
+from specter.llm.ledger import CostLedger
 from specter.llm.prompt_compiler import PromptCompiler
-from specter.llm.response_cache import ResponseCache, make_cache_key
+from specter.llm.response_cache import ResponseCache
 from specter.llm.router import ModelRouter
 
 logger = structlog.get_logger(__name__)
 tracer = trace.get_tracer(__name__)
-
-_APP_NAME = "specter"
-_USER_ID = "specter"
-
-# Session-state keys the callbacks use to hand telemetry to `run_agent`.
-# Deliberately not the `temp:` prefix — ADK trims `temp:` deltas before they
-# are persisted (`base_session_service.py:187`), so they would not survive the
-# `get_session` read-back below.
-_STATE_PREFIX_FINGERPRINT = "specter_prefix_fingerprint"
-_STATE_PROMPT_TOKENS = "specter_prompt_tokens"
-_STATE_CACHED_TOKENS = "specter_cached_tokens"
-_STATE_COMPLETION_TOKENS = "specter_completion_tokens"
-
-
-class AgentOutputError(SpecterError):
-    """The model returned something that is not valid against the agent's
-    `output_schema`. Raised rather than repaired — a case built on a
-    half-parsed agent response is worse than no case (CLAUDE.md hard rule 7).
-    """
-
-
-class PrefixInstabilityError(SpecterError):
-    """The system prefix reaching the model differs from the one the compiler
-    produced. This means something is leaking above the cache boundary and the
-    caching pillar has silently stopped working — halt rather than continue
-    paying full price while reporting success.
-    """
 
 
 @dataclass(frozen=True)
@@ -149,15 +125,33 @@ def build_agent(
     if not name.isidentifier():
         raise ValueError(f"agent name {name!r} must be a valid Python identifier")
 
-    tier = runtime.router.resolve(task_class)
-    model = runtime.router.model_for(task_class)
+    instruction_path = runtime.prompts_dir / instruction_file
+    instruction = instruction_path.read_text().strip()
+    return _build_agent_with_instruction(
+        name, task_class, instruction, tools, output_schema, runtime
+    )
+
+
+def _build_agent_with_instruction(
+    name: str,
+    task_class: str,
+    instruction: str,
+    tools: list[Any],
+    output_schema: type[BaseModel],
+    runtime: AgentRuntime,
+    tier_override: TierConfig | None = None,
+) -> LlmAgent:
+    """The actual builder. `tier_override` is escalation's hook (M3): re-run
+    the same instruction/tools/schema at a different tier without re-reading
+    the instruction file. `build_agent` is the normal entry point; this is
+    also called directly by `run_agent` for the one escalated retry.
+    """
+    tier = tier_override if tier_override is not None else runtime.router.resolve(task_class)
+    model = runtime.router.model_for_tier(tier.name)
     prefix = runtime.compiler.system_prefix
     expected_fingerprint = runtime.compiler.compile(
         name, task_class, EvidenceBundle(provider_npi="", evidence={}, task_instruction="")
     ).prefix_fingerprint
-
-    instruction_path = runtime.prompts_dir / instruction_file
-    instruction = instruction_path.read_text().strip()
 
     # Params are positional-or-keyword on purpose: ADK invokes these
     # BY KEYWORD (`base_llm_flow.py:243`), so the names `callback_context` /
@@ -224,15 +218,6 @@ def build_agent(
     )
 
 
-def _final_text(event: Any) -> str | None:
-    if not (event.is_final_response() and event.content and event.content.parts):
-        return None
-    text = "".join(
-        part.text for part in event.content.parts if part.text and not part.thought
-    )
-    return text or None
-
-
 async def run_agent(
     agent: LlmAgent,
     task_class: str,
@@ -245,150 +230,35 @@ async def run_agent(
 
     L1 cache hit short-circuits the entire ADK invocation. On a miss the call
     runs, is recorded to the ledger, and the result is stored for next time.
+
+    After a successful parse, `router.should_escalate` checks the result
+    against `config/models.yaml`'s escalation rules. A match re-runs the same
+    evidence through the same agent rebuilt at the escalated tier — capped at
+    exactly one retry (every rule in the policy today sets `max_retries: 1`;
+    `should_escalate` doesn't surface a higher count, so this doesn't loop).
+    If the escalated call also fails schema validation, that raises rather
+    than retrying again (CLAUDE.md hard rule 7).
     """
     tier = runtime.router.resolve(task_class)
-    compiled = runtime.compiler.compile(agent.name, task_class, evidence)
-    cache_key = make_cache_key(
-        agent.name,
-        compiled.prompt_version,
-        tier.model,
-        {"user": compiled.user, "prefix": compiled.prefix_fingerprint},
+    result, parsed = await _invoke(agent, task_class, tier, evidence, runtime, output_schema)
+
+    escalated_tier = runtime.router.should_escalate(task_class, parsed)
+    if escalated_tier is None:
+        return result
+
+    # `agent.instruction` is typed `str | Callable[...]` by ADK (it allows a
+    # dynamic instruction), but every Specter agent is built by `build_agent`
+    # from a static file — always a plain string in practice.
+    instruction = agent.instruction
+    if not isinstance(instruction, str):
+        raise AgentOutputError(f"{agent.name}: instruction is not a static string")
+    escalated_agent = _build_agent_with_instruction(
+        agent.name, task_class, instruction, agent.tools, output_schema, runtime,
+        tier_override=escalated_tier,
     )
-
-    cached = runtime.cache.get(cache_key)
-    if cached is not None:
-        runtime.ledger.record(
-            LlmCallRecord(
-                ts=datetime.now(UTC),
-                run_id=runtime.run_id,
-                agent=agent.name,
-                task_class=task_class,
-                tier=tier.name,
-                model=tier.model,
-                # An L1 hit avoids these tokens entirely; recording zero keeps
-                # the prefix-cache hit rate honest, and the avoided cost is
-                # reconstructible from the cached LlmResult.
-                prompt_tokens=0,
-                cached_tokens=0,
-                completion_tokens=0,
-                latency_ms=0.0,
-                cost_usd=None,
-                cache_layer=CacheLayer.L1,
-                escalated=False,
-            )
-        )
-        return AgentRunResult(
-            agent=agent.name,
-            task_class=task_class,
-            tier=tier.name,
-            model=tier.model,
-            output=_parse_output(agent.name, cached.content, output_schema),
-            prompt_tokens=0,
-            cached_tokens=0,
-            completion_tokens=0,
-            latency_ms=0.0,
-            cache_layer=CacheLayer.L1,
-            escalated=False,
-            prefix_fingerprint=compiled.prefix_fingerprint,
-        )
-
-    session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
-    started = time.perf_counter()
-    final_text: str | None = None
-
-    runner = Runner(app_name=_APP_NAME, agent=agent, session_service=session_service)
-    try:
-        session = await session_service.create_session(app_name=_APP_NAME, user_id=_USER_ID)
-        async for event in runner.run_async(
-            user_id=_USER_ID,
-            session_id=session.id,
-            new_message=types.Content(role="user", parts=[types.Part(text=compiled.user)]),
-        ):
-            # `is_final_response()` is true once per participating agent, not
-            # once per invocation — keep the last rather than breaking early.
-            text = _final_text(event)
-            if text is not None:
-                final_text = text
-        refreshed = await session_service.get_session(
-            app_name=_APP_NAME, user_id=_USER_ID, session_id=session.id
-        )
-    finally:
-        # `close()` tears down toolsets and MCP sessions (M7 depends on this).
-        await runner.close()  # type: ignore[no-untyped-call]
-
-    latency_ms = (time.perf_counter() - started) * 1000.0
-    if final_text is None:
-        raise AgentOutputError(f"{agent.name}: produced no final response")
-
-    state: dict[str, Any] = dict(refreshed.state) if refreshed else {}
-    prompt_tokens = int(state.get(_STATE_PROMPT_TOKENS, 0))
-    cached_tokens = int(state.get(_STATE_CACHED_TOKENS, 0))
-    completion_tokens = int(state.get(_STATE_COMPLETION_TOKENS, 0))
-
-    runtime.cache.set(
-        cache_key,
-        LlmResult(
-            content=final_text,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            model=tier.model,
-            latency_ms=latency_ms,
-        ),
+    escalated_result, _ = await _invoke(
+        escalated_agent, task_class, escalated_tier, evidence, runtime, output_schema,
+        escalated=True,
     )
-    runtime.ledger.record(
-        LlmCallRecord(
-            ts=datetime.now(UTC),
-            run_id=runtime.run_id,
-            agent=agent.name,
-            task_class=task_class,
-            tier=tier.name,
-            model=tier.model,
-            prompt_tokens=prompt_tokens,
-            cached_tokens=cached_tokens,
-            completion_tokens=completion_tokens,
-            latency_ms=latency_ms,
-            cost_usd=compute_cost(tier, prompt_tokens, cached_tokens, completion_tokens),
-            cache_layer=CacheLayer.NONE,
-            escalated=False,
-        )
-    )
-    logger.info(
-        "agent.completed",
-        agent=agent.name,
-        task_class=task_class,
-        tier=tier.name,
-        prompt_tokens=prompt_tokens,
-        cached_tokens=cached_tokens,
-        latency_ms=round(latency_ms, 1),
-    )
+    return escalated_result
 
-    return AgentRunResult(
-        agent=agent.name,
-        task_class=task_class,
-        tier=tier.name,
-        model=tier.model,
-        output=_parse_output(agent.name, final_text, output_schema),
-        prompt_tokens=prompt_tokens,
-        cached_tokens=cached_tokens,
-        completion_tokens=completion_tokens,
-        latency_ms=latency_ms,
-        cache_layer=CacheLayer.NONE,
-        escalated=False,
-        prefix_fingerprint=compiled.prefix_fingerprint,
-    )
-
-
-def _parse_output(
-    agent_name: str, text: str, output_schema: type[BaseModel]
-) -> dict[str, Any]:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AgentOutputError(f"{agent_name}: response was not valid JSON: {exc}") from exc
-    try:
-        return output_schema.model_validate(payload).model_dump(mode="json")
-    except ValidationError as exc:
-        raise AgentOutputError(
-            f"{agent_name}: response did not validate against {output_schema.__name__}: {exc}"
-        ) from exc

@@ -8,6 +8,7 @@ constraints Azure imposes on output schemas.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -16,14 +17,24 @@ import pytest
 from google.adk.tools.function_tool import FunctionTool
 from neo4j import Driver
 
+import specter.agents._base as agent_base
 from specter.agents._base import (
     AgentOutputError,
     AgentRuntime,
-    _parse_output,
     build_agent,
+    run_agent,
 )
+from specter.agents._llm_call import _parse_output
 from specter.agents.data_quality import build_evidence
-from specter.core.contracts import DataQualityReport, ScreeningThresholds
+from specter.core.contracts import (
+    AgentRunResult,
+    DataQualityReport,
+    EntityMatchAdjudication,
+    EvidenceBundle,
+    ScreeningThresholds,
+    TierConfig,
+)
+from specter.core.enums import CacheLayer, MatchDecision
 from specter.llm.ledger import CostLedger
 from specter.llm.prompt_compiler import PromptCompiler
 from specter.llm.response_cache import ResponseCache
@@ -249,3 +260,78 @@ def test_build_evidence_reports_observed_row_counts() -> None:
         assert "row_count" in observed
         assert "null_rate_per_column" in observed
         assert isinstance(observed["row_count_matches_manifest"], bool)
+
+
+# --- escalation (M3) -----------------------------------------------------
+
+
+def test_run_agent_escalates_on_ambiguous_match_probability(
+    monkeypatch: pytest.MonkeyPatch, runtime: AgentRuntime
+) -> None:
+    """`adjudicate_entity_match` escalates to T2_reasoning when
+    `match_probability` lands in [0.45, 0.65] (`config/models.yaml`). Mocks
+    `_invoke` so this stays offline — no LLM call, no cache/ledger I/O — and
+    just exercises the escalation wiring in `run_agent` itself.
+    """
+
+    def _output(match_probability: float) -> dict[str, Any]:
+        return {
+            "npi": "1000000000",
+            "candidate_npi": "1000000001",
+            "matching_features": ["shares_address"],
+            "conflicting_features": [],
+            "match_probability": match_probability,
+            "decision": MatchDecision.AGENT_REVIEW.value,
+        }
+
+    calls: list[tuple[str, bool]] = []
+
+    async def fake_invoke(
+        agent: Any,
+        task_class: str,
+        tier: TierConfig,
+        evidence: EvidenceBundle,
+        runtime_: AgentRuntime,
+        output_schema: type[Any],
+        *,
+        escalated: bool = False,
+    ) -> tuple[AgentRunResult, Any]:
+        calls.append((tier.name, escalated))
+        probability = 0.55 if tier.name == "T1_workhorse" else 0.80
+        payload = _output(probability)
+        parsed = output_schema.model_validate(payload)
+        result = AgentRunResult(
+            agent=agent.name,
+            task_class=task_class,
+            tier=tier.name,
+            model=tier.model,
+            output=parsed.model_dump(mode="json"),
+            prompt_tokens=0,
+            cached_tokens=0,
+            completion_tokens=0,
+            latency_ms=0.0,
+            cache_layer=CacheLayer.NONE,
+            escalated=escalated,
+            prefix_fingerprint="test",
+        )
+        return result, parsed
+
+    monkeypatch.setattr(agent_base, "_invoke", fake_invoke)
+
+    agent = build_agent(
+        name="entity_resolution",
+        task_class="adjudicate_entity_match",
+        instruction_file="entity_resolution.md",
+        tools=[],
+        output_schema=EntityMatchAdjudication,
+        runtime=runtime,
+    )
+    evidence = EvidenceBundle(provider_npi="1000000000", evidence={}, task_instruction="test")
+    result = asyncio.run(
+        run_agent(agent, "adjudicate_entity_match", evidence, runtime, EntityMatchAdjudication)
+    )
+
+    assert calls == [("T1_workhorse", False), ("T2_reasoning", True)]
+    assert result.escalated is True
+    assert result.tier == "T2_reasoning"
+    assert result.output["match_probability"] == pytest.approx(0.80)

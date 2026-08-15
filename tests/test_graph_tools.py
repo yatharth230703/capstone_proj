@@ -71,7 +71,11 @@ def test_get_community_context_s10(driver: Driver) -> None:
     assert summary is not None
     assert summary.member_count == 6
     assert any("excluded_member_count=2" in fact for fact in summary.structural_facts)
-    assert summary.characterization is None  # no AZURE_API_KEY yet — honest gap, not a crash
+    # M2 characterized all 255 communities; D-9 fix reads it back rather than
+    # always returning None.
+    assert summary.characterization is not None
+    assert summary.generated_at is not None
+    assert summary.prompt_version is not None
 
 
 def test_search_enforcement_cases_matches_loaded_doj_case(driver: Driver) -> None:

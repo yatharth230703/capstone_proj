@@ -24,6 +24,9 @@ Currently defined:
   BUILD_MILESTONES.md, plan §9 `agents/_base.py` + `agents/data_quality.py`)
 - CommunityCharacterization (M2 of BUILD_MILESTONES.md, plan §6.4
   `graph/summaries.py`)
+- EntityMatchAdjudication, GraphFindings, EnforcementFindings (M3 of
+  BUILD_MILESTONES.md, plan §9.3-9.5 `agents/entity_resolution.py`,
+  `agents/graph_investigation.py`, `agents/enforcement_intel.py`)
 """
 
 from __future__ import annotations
@@ -34,7 +37,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from specter.core.enums import CacheLayer, DataOrigin, FreshnessStatus, Verdict
+from specter.core.enums import (
+    CacheLayer,
+    DataOrigin,
+    FreshnessStatus,
+    LegalStatus,
+    MatchDecision,
+    Verdict,
+)
 
 
 class SpecterModel(BaseModel):
@@ -213,6 +223,12 @@ class RiskSignal(SpecterModel):
     """Output of a `tools/signal_tools.py` detector (plan §8) — zero LLM
     involvement. `threshold` is recorded alongside `value` so a case packet
     stays reproducible even if `config/screening.yaml` changes later.
+
+    `known_limitations`/`geocoding_method` are required (not defaulted) so
+    this stays safe nested inside an agent `output_schema` (Azure strict mode
+    rejects any property carrying a `default`, transitively through `$defs`)
+    — every detector fills them explicitly, empty/`None` where they don't
+    apply. CLAUDE.md Amendment 3 requires them on `geographic_spread`.
     """
 
     signal_type: str
@@ -222,6 +238,8 @@ class RiskSignal(SpecterModel):
     source_ids: list[str]
     data_origin: DataOrigin
     detected_at: datetime
+    known_limitations: list[str]
+    geocoding_method: str | None
 
 
 class ScreeningThresholds(SpecterModel):
@@ -405,6 +423,61 @@ class CommunityCharacterization(AgentOutput):
     characterization: str
     notable_members: list[str]
     risk_themes: list[str]
+
+
+class EntityMatchAdjudication(AgentOutput):
+    """Output of the Entity Resolution Agent (plan §9.3, M3) —
+    `tools/entity_tools.propose_entity_matches` computes the deterministic
+    features; adjudicating them into a match decision is this agent's job.
+    Bias conservative: a false merge (`auto_link` on a non-match) is worse
+    than a missed match.
+    """
+
+    npi: str
+    candidate_npi: str
+    matching_features: list[str]
+    conflicting_features: list[str]
+    match_probability: float = Field(ge=0.0, le=1.0)
+    decision: MatchDecision
+
+
+class GraphFindings(AgentOutput):
+    """Output of the Graph Investigation Agent (plan §9.4, M3) — the first
+    GraphRAG consumer. `signals` are echoed back from the deterministic
+    detectors, never re-derived; `after_model_callback` enforces that every
+    numeric literal in `narration`/`community_context` traces to a tool
+    result already gathered for this call (CLAUDE.md hard rule 1).
+    """
+
+    signals: list[RiskSignal]
+    community_context: str
+    narration: str
+    linked_entities: list[str]
+
+
+class CaseLegalStatus(AgentOutput):
+    """One `(case_id, legal_status)` pair. A list of these, not a
+    `dict[str, LegalStatus]` — Azure strict-mode structured output cannot
+    represent an open-ended `dict` (no fixed `properties`/`required`); see
+    NOTES_API_DEVIATIONS.md.
+    """
+
+    case_id: str
+    legal_status: LegalStatus
+
+
+class EnforcementFindings(AgentOutput):
+    """Output of the Enforcement Intelligence Agent (plan §9.5, M3). A match
+    built on a common-name hit (no NPI, no exact identifier overlap) goes in
+    `disambiguation_flags`, never silently into `matches` as settled — the
+    same "no auto-link without an exact identifier" rule as CLAUDE.md
+    Amendment 1's state-exclusion matching.
+    """
+
+    matches: list[str]
+    typologies: list[str]
+    legal_status_per_match: list[CaseLegalStatus]
+    disambiguation_flags: list[str]
 
 
 class AgentRunResult(SpecterModel):

@@ -274,3 +274,31 @@ CALL db.create.setNodeVectorProperty(n, 'embedding', row.vector)
 
 Verified live. `SET n.embedding = $vector` also stores the list but the
 vector index never picks it up — use the procedure, not a plain `SET`.
+
+---
+
+## D13 — Azure strict-mode structured output cannot represent `dict[str, X]`
+
+**Found:** M3, live. **Affects:** `core/contracts.py`, every future agent
+schema.
+
+`EnforcementFindings.legal_status_per_match` was originally typed
+`dict[str, LegalStatus]` (plan §9.5's natural reading: "adjudicate
+legal_status per match"). Pydantic renders an open-ended `dict[str, X]` as
+`{"type": "object", "additionalProperties": {...}}` with no fixed
+`properties`/`required` — strict mode rejects this outright:
+
+```
+litellm.BadRequestError: Invalid schema for response_format
+'EnforcementFindings': In context=(), 'required' is required to be supplied
+and to be an array including every key in properties. Extra required key
+'legal_status_per_match' supplied.
+```
+
+Resolution: any per-key mapping in an agent `output_schema` must be a
+`list[SomeModel]` of explicit `(key, value)` pairs instead of a bare `dict`.
+`legal_status_per_match: list[CaseLegalStatus]` where `CaseLegalStatus` has
+`case_id: str` and `legal_status: LegalStatus` fields. This is D5's
+"no defaults" constraint's sibling — both are strict-mode shape limits that
+only surface as a 400 at run time, not at schema-build time. Watch for this
+whenever a future agent schema's natural shape is "one value per key."
