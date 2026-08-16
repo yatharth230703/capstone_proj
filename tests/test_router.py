@@ -45,7 +45,7 @@ def test_resolve_unknown_task_class_raises(router: ModelRouter) -> None:
 def test_grounded_research_routes_to_vertex(router: ModelRouter) -> None:
     tier = router.resolve("grounded_research")
     assert tier.provider == "vertex"
-    assert tier.model == "gemini-2.5-flash"
+    assert tier.model == "gemini-3.7-flash"
 
 
 def test_judge_case_rubric_routes_to_t2_not_kimi(router: ModelRouter) -> None:

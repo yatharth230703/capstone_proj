@@ -178,7 +178,7 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 | **M1** | Agent foundation | `agents/_base.py` factory, ADK 2.x verification, tool bindings, DataQuality agent | `DONE` |
 | **M2** | Graph RAG completion | `graph/embeddings.py`, `graph/summaries.py`, EnforcementCase corpus, `retrieval.global_/semantic` | `DONE` |
 | **M3** | Investigation agents | EntityResolution, GraphInvestigation, EnforcementIntel | `DONE` |
-| **M4** | Grounded research | Vertex Gemini agent + `AgentTool` isolation, grounding citations | `TODO` |
+| **M4** | Grounded research | Vertex Gemini agent + `AgentTool` isolation, grounding citations | `DONE` |
 | **M5** | Judgement agents | Skeptic, CaseReporter, `CasePacket`, banned-vocabulary enforcement | `TODO` |
 | **M6** | Orchestration | `workflow/screening.py`, `ScoringService`, `scripts/40_screen.py` | `TODO` |
 | **M7** | MCP integration | `tools/mcp_tools.py` — Playwright + Neo4j Cypher guardrails | `TODO` |
@@ -192,14 +192,14 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: end of M3.**
+**Last updated: end of M4.**
 
 ### Verified green
 
 ```
-pytest tests/ -q          154 passed
+pytest tests/ -q          158 passed
 ruff check src/ tests/ scripts/   All checks passed
-mypy src/                 Success: no issues in 45 source files
+mypy src/                 Success: no issues in 46 source files
 docker compose ps         neo4j, phoenix, redis — all healthy
 ```
 
@@ -233,8 +233,27 @@ same `openai/<deployment>` + `api_base` call form as chat completions — see
 `NOTES_API_DEVIATIONS.md` D11 for the one surprise (`response.data` items are
 plain dicts keyed `embedding`/`index`, not attribute-access objects).
 
-**Vertex is NOT configured** — `GOOGLE_CLOUD_PROJECT` is empty. M4 is blocked
-on the operator supplying it.
+**Vertex — configured and working (M4).** Operator supplied
+`GOOGLE_CLOUD_PROJECT` and a service-account key at
+`.secrets/vertex-sa.json`, and changed `VERTEX_GROUNDING_MODEL` from the
+plan's `gemini-2.5-flash` to **`gemini-3.7-flash`** (also updated in
+`config/models.yaml`'s `T_ground` tier and `.env.example`) — that model name
+is outside this codebase's own knowledge and was taken as given, not
+second-guessed. `GOOGLE_CLOUD_LOCATION` is `global`, not the plan's
+`us-central1` default (also an operator change, both `.env` and
+`.env.example`/`settings.py`'s default updated to match).
+
+**Load-bearing trap, not obvious from the plan:** `Settings` (pydantic-
+settings) reads `.env` into a Python object; it never populates
+`os.environ`. ADK's native `Gemini` model (required for `google_search` —
+see M4 below) builds its `google.genai.Client` by reading
+`GOOGLE_GENAI_USE_VERTEXAI`/`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION`/
+`GOOGLE_APPLICATION_CREDENTIALS` straight from `os.environ`, which was
+empty of all four (`env | grep GOOGLE` → nothing) even with a fully correct
+`.env`. `agents.grounded_research._ensure_vertex_env()` forwards them with
+`setdefault` before agent construction. Any *other* future Vertex-native
+(non-`LiteLlm`) agent needs the same forwarding — it does not come for free
+from `Settings` existing. `NOTES_API_DEVIATIONS.md` D14.
 
 ### Prompt caching — measured, working
 
@@ -298,7 +317,7 @@ Built and tested: `core/`, `ingest/` (4 connectors + synthetic), `graph/`
 retrieval), `llm/` (router, prompt compiler, response cache, ledger),
 `tools/` (graph, signal, entity, evidence, bindings), `agents/` (`_base.py`,
 `_llm_call.py`, `_errors.py`, `data_quality.py`, `entity_resolution.py`,
-`graph_investigation.py`, `enforcement_intel.py`).
+`graph_investigation.py`, `enforcement_intel.py`, `grounded_research.py`).
 
 `agents/_base.py` (agent construction) and `agents/_llm_call.py` (agent
 invocation — the L1 cache, the ADK runner, output validation) were split in
@@ -306,10 +325,20 @@ M3: `_base.py` had grown to 479 lines, over CLAUDE.md's 400-line module
 ceiling, once escalation was wired in. `agents/_errors.py` holds
 `AgentOutputError`/`PrefixInstabilityError` — split out purely to give both
 files a place to import them from without a circular import. `core/contracts.py`
-is at 512 lines and was **not** split — CLAUDE.md's "all contracts live in
+is at 541 lines and was **not** split — CLAUDE.md's "all contracts live in
 `core/contracts.py`" is a more specific rule than the generic 400-line cap,
 and it was already over 400 before M3 (450, unaddressed by M1/M2). Treat
 this as an accepted tension, not debt with a fix pending.
+
+**`agents/grounded_research.py` does not go through `agents/_base.py` at
+all** — no `build_agent`/`run_agent`, no cache boundary, no L1 cache, no
+router-resolved `LiteLlm`. It's a standalone `LlmAgent` built directly from
+a bare `"gemini-*"` model string (required for ADK's `google_search`
+built-in tool — see M4 below), constructed by
+`build_grounded_research_agent(router, settings)` and invoked by its own
+`Runner`/`InMemorySessionService` in `research_topic()`. `router.resolve(
+"grounded_research")` is still used, but only to read the model name out of
+`config/models.yaml` — not to build a `LiteLlm`.
 
 Still empty: `workflow/`, `judge/`, `obs/`. Missing entirely: `cli.py`,
 `tools/mcp_tools.py`, `README.md`, `scripts/00_bootstrap.sh`,
@@ -431,6 +460,47 @@ D-2 — correctly returned empty `matches`, not a fabricated one). Full output
 captured in this session's transcript; re-run the script to reproduce
 (costs real Azure tokens, same caveat as `scripts/15_smoke_data_quality.py`).
 
+### Grounded Research Agent (M4) — live, isolated, citation trail confirmed
+
+`agents/grounded_research.py`: `build_grounded_research_agent(router,
+settings)` builds an `LlmAgent` with exactly one tool (`google_search`);
+`build_grounded_research_tool(agent)` wraps it in `AgentTool(...,
+propagate_grounding_metadata=True)` for future consumers, who must receive
+it as a bound tool, never attach `agent` itself as a `sub_agent`
+(CLAUDE.md's hard isolation rule). `research_topic(query, agent,
+evidence_dir)` runs the agent directly against its own `Runner` and turns
+every `grounding_metadata.grounding_chunks[i].web` into an
+`EvidenceArtifact` with `extraction_method="vertex_grounding"`.
+
+`scripts/45_smoke_grounded_research.py` run live against a real DME-fraud
+enforcement query: **7/7 real citations**, each a genuine
+`EvidenceArtifact` written to `data/evidence/`, narrative correctly used
+`charged`/`sentenced`/`pleaded guilty` language per source rather than
+collapsing them. Raises if citations come back empty — that's the D10
+regression this script exists to catch.
+
+**Two things the *next* session must not get wrong:**
+
+1. **`build_grounded_research_tool()`'s `AgentTool` propagation path has
+   not been exercised live** — only the direct-call path
+   (`research_topic`) has. M5's `enforcement_intel`-style consumer (or
+   whichever agent first gets `AgentTool(grounded_research_agent)` in its
+   `tools=[]`) must re-verify `tool_context.state['temp:_adk_grounding_
+   metadata']` actually round-trips before trusting it. `NOTES_API_
+   DEVIATIONS.md` D10.
+2. **Grounding URIs are Google redirect links, not the source page URL**
+   (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`), and
+   `web.title` is sometimes just the bare domain. Confirmed live — see
+   the stored artifact content in this session's `data/evidence/` output.
+   `check_citation_validity` (M9) is unaffected (it only checks an
+   artifact exists), but don't assume the stored URI is directly
+   followable by a human reviewer. `NOTES_API_DEVIATIONS.md` D15.
+
+`EvidenceArtifact` gained a required `extraction_method: str` field (no
+default, same discipline as `RiskSignal`'s M3 fields) — `store_artifact()`
+now takes it as a 5th positional/keyword argument. Every existing call site
+(4 in `tests/test_evidence_tools.py`) was updated to pass `"direct"`.
+
 ---
 
 ## 4. CARRIED DEBT
@@ -448,6 +518,8 @@ captured in this session's transcript; re-run the script to reproduce
 | ~~D-9~~ | ~~`get_community_context` never reads persisted characterization~~ | **Cleared M3.** Reads `characterization`/`notable_members`/`risk_themes`/`generated_at`/`prompt_version` off the Community node alongside the always-fresh structural facts. Verified live. | — |
 | D-10 | `EnforcementCase.legal_status` loaded by M2's `graph/enforcement_loader.py` still comes from the **regex keyword heuristic** (`infer_legal_status`) on the graph node itself — **partially addressed, not cleared.** M3's `enforcement_intel.extract_enforcement_case` now does real per-match adjudication and returns it in `legal_status_per_match`, but nothing writes that back onto the `EnforcementCase` node — the graph's own `legal_status` property is still the loader's crude guess. Whether it *should* be written back (vs. living only in the case packet) wasn't decided this session. | `search_enforcement_cases`'s own return value stays the loader's heuristic until someone decides where the agent's adjudication is meant to be the system of record | **M6** (CasePacket assembly is the natural place to decide this) |
 | D-14 | `agents/graph_investigation.py`'s numeric-grounding check runs as a post-hoc Python step in `investigate()`, not literally inside ADK's `after_model_callback` as CLAUDE.md/plan §9.4 say | `_base.py`'s callback slot is shared, fixed-signature telemetry plumbing; a second, per-agent-pluggable callback would touch it for every future agent. Functionally equivalent (extract → assert → quote-back retry → raise), proven offline. Revisit if a future agent needs the same pattern and the duplication starts to hurt | not urgent — revisit if it recurs |
+| D-15 | `build_grounded_research_tool()`'s `AgentTool(..., propagate_grounding_metadata=True)` wiring exists and is unit-tested offline, but **the propagation path has never actually run live** — M4's own checkpoint calls the search agent directly via its own `Runner`, not through a consumer's tool call, so `tool_context.state['temp:_adk_grounding_metadata']` round-tripping is verified against ADK 2.6.2 source only, not by a real call | No consumer agent exists yet to make the call through — that's whichever M5/M9 agent first puts `AgentTool(grounded_research_agent)` in its own `tools=[]` | **M5 or M9**, whichever wires the first live consumer |
+| D-16 | Plan §9.1's **Orchestrator agent** (`plan_investigation`, T2, output `InvestigationPlan { provider_npis, depth, rationale, budget_hint }`) is not scoped into any milestone in this file — not M5 (judgement agents), not M6 (orchestration, which per its own scope line is `workflow/screening.py` + `ScoringService`, a deterministic graph, not an LLM planning agent) | Found while writing M5's Action Plan (M4 session) — genuinely unclear whether this is a deliberate cut from the plan's own §9.1, or a gap in how this file broke the plan into milestones. Not decided by this session; flagging rather than guessing | **M6**, needs an explicit operator decision first |
 
 ---
 
@@ -810,121 +882,115 @@ tests/test_agent_base.py::test_run_agent_escalates_on_ambiguous_match_probabilit
 
 ---
 
-### M4 — Grounded research · `TODO`
+### M4 — Grounded research · `DONE`
 
-**Scope.** `agents/grounded_research.py` on Vertex Gemini with exactly one
-tool (`google_search`), exposed to other agents in isolation via `AgentTool`;
-extract `grounding_metadata` URIs into `EvidenceArtifact`s with
-`extraction_method="vertex_grounding"`.
+**Delivered.** The system's first and only Vertex (non-Azure) LLM call: an
+isolated `google_search` agent with a real, live-verified citation trail.
+Unblocked mid-session — the operator supplied `GOOGLE_CLOUD_PROJECT`, a
+service-account key, and changed the model to `gemini-3.7-flash` (not in
+this codebase's training-era knowledge; taken as given, per CLAUDE.md's
+"operator supplies pricing/config" pattern elsewhere).
 
-**Blocked.** `GOOGLE_CLOUD_PROJECT` is still empty in `.env` (checked live,
-end of M3). Nothing in this Action Plan can be executed or checkpointed
-until the operator supplies it — `GOOGLE_APPLICATION_CREDENTIALS` already
-points at `./.secrets/vertex-sa.json`, `GOOGLE_GENAI_USE_VERTEXAI=TRUE`, and
-`VERTEX_GROUNDING_MODEL=gemini-2.5-flash` are all already set; only the
-project ID is missing. If a session picks this up without that value set,
-stop and ask rather than guessing a project ID or working around the check.
+| Path | What |
+|---|---|
+| `src/specter/agents/grounded_research.py` | `build_grounded_research_agent`, `build_grounded_research_tool`, `research_topic`, `_ensure_vertex_env` |
+| `src/specter/core/contracts.py` | EDIT — `GroundedResearchResult`; `EvidenceArtifact` gained required `extraction_method: str` |
+| `src/specter/tools/evidence_tools.py` | EDIT — `store_artifact()` takes `extraction_method` as a required 5th argument |
+| `prompts/agents/grounded_research.md` | CREATE — role brief: answer the question, characterize source type, legal-language discipline |
+| `scripts/45_smoke_grounded_research.py` | CREATE — live checkpoint, raises on zero citations |
+| `tests/test_grounded_research.py` | CREATE — 4 offline tests: tool isolation, model routing, `AgentTool` wiring, fail-loudly on missing project |
+| `tests/test_evidence_tools.py` | EDIT — 4 call sites updated for the new required argument |
+| `tests/test_router.py` | EDIT — `test_grounded_research_routes_to_vertex` updated for `gemini-3.7-flash` (was already failing when this session started, from the operator's pre-session config edit) |
+| `NOTES_API_DEVIATIONS.md` | D10 updated (confirmed against source, live gap noted); D14, D15 added |
 
-#### Action Plan
+**Checkpoint — passed, live.**
 
-**Goal.** One working grounded-research agent that turns a free-text query
-into web-sourced findings with a real citation trail — the system's first
-and only Vertex (non-Azure) LLM call, and the only place `google_search`
-runs. Plan §9.6.
+```
+pytest tests/ -q                      158 passed
+ruff check src/ tests/ scripts/       All checks passed
+mypy src/                             Success: no issues in 46 source files
+docker compose ps                     neo4j, phoenix, redis — all healthy
 
-**Inherited context — read this before touching anything.**
+python scripts/45_smoke_grounded_research.py
+  agent tools: ['GoogleSearchTool']
+  AgentTool propagate_grounding_metadata=True
+  citations: 7   (all extraction_method=vertex_grounding, all real EvidenceArtifacts on disk)
+  narrative used charged/pleaded guilty/sentenced correctly per source — no
+  legal-status collapsing, no banned vocabulary
+```
 
-- **The multi-tool isolation failure mode is already documented, twice.**
-  CLAUDE.md itself and `NOTES_API_DEVIATIONS.md` D10 both cover it:
-  `GroundedResearchAgent` gets `tools=[google_search]` and nothing else,
-  ever — no `sub_agent` of a tool-bearing agent, no second tool added later
-  "just this once." Consumers receive it wrapped in `AgentTool`, never as a
-  direct `sub_agent`. Violating this produces `400 INVALID_ARGUMENT:
-  Multiple tools are supported only when they are all search tools` (plan
-  §9.6, phase_1_build_plan.md line ~894).
-- **`AgentTool` drops grounding metadata by default — this is the part
-  that will silently break M4's entire point if missed.**
-  `NOTES_API_DEVIATIONS.md` D10 (found in M1, unverified live — nobody has
-  actually run this yet): `AgentTool.run_async` discards
-  `grounding_metadata` unless constructed with
-  `propagate_grounding_metadata=True`, which stashes it at
-  `tool_context.state['temp:_adk_grounding_metadata']`. UNVERIFIED: exact
-  line numbers/behavior on whatever ADK version is installed when this
-  milestone actually starts — re-check `.context/adk-llms-full.txt` and
-  `pip show google-adk` per CLAUDE.md's "before you write agent code" ritual,
-  since D10 was researched, not executed.
-- **`config/models.yaml` already routes `grounded_research` to `T_ground`**
-  (`gemini-2.5-flash`, provider `vertex`) — verified by
-  `test_grounded_research_routes_to_vertex` in `tests/test_router.py`. No
-  routing config work needed.
-- **`agents/_base.py`'s `build_agent`/`_build_agent_with_instruction` assume
-  an Azure tier** in `_transport()` (`llm/router.py`) — vertex tiers hit the
-  `if tier.provider != "azure": return {}` branch and get no transport
-  kwargs, which is probably right for Vertex (auth is via
-  `GOOGLE_APPLICATION_CREDENTIALS`, not an API key in the constructor), but
-  this has never been exercised end-to-end. `PrefixInstabilityError`'s
-  cache-boundary check in `before_model` assumes every agent shares the same
-  B0-B3 `static_instruction` prefix — decide whether `GroundedResearchAgent`
-  goes through `build_agent` at all, or is constructed separately, since it
-  has no evidence bundle / doesn't need the cache boundary or B0 tool
-  schemas (its only tool is `google_search`, not a Specter binding). Likely
-  answer: `GroundedResearchAgent` is NOT built via `agents._base.build_agent`
-  — it's a standalone `LlmAgent`, closer to the plan §9.6 snippet than to
-  `data_quality`'s pattern. Confirm this before writing code.
+**Key decisions, and why.**
 
-**File manifest.**
+1. **`GroundedResearchAgent` bypasses `agents/_base.py` entirely** — no
+   `build_agent`, no cache boundary, no L1 cache, no `router.model_for_tier`.
+   `google_search` only works with ADK's native `Gemini` model class, which
+   `LlmAgent` auto-resolves from a bare `"gemini-*"` string; `_base.py`'s
+   `model_for_tier` always wraps in `LiteLlm`, which is the wrong client for
+   this agent. `router.resolve("grounded_research")` is still used, but only
+   to read the model name — routing transparency stays intact without
+   forcing this agent through machinery it doesn't need (no evidence bundle,
+   no Specter tool bindings, nothing to cache).
 
-| Path | Action | Notes |
-|---|---|---|
-| `src/specter/agents/grounded_research.py` | CREATE | Standalone `LlmAgent` + `AgentTool` wrapper, per plan §9.6's snippet. |
-| `prompts/agents/grounded_research.md` | CREATE | Role brief — what to search for, how to characterize source reliability. |
-| `src/specter/core/contracts.py` | EDIT | `EvidenceArtifact` already exists (M4-of-plan/`tools/evidence_tools.py`) — extend/reuse, don't duplicate. Add a schema only if grounded findings need one beyond `EvidenceArtifact`. |
-| `tests/test_grounded_research.py` | CREATE | Offline: `AgentTool` wiring, single-tool assertion, `propagate_grounding_metadata=True` set. Live smoke script separately, like M1/M3. |
-| `scripts/45_smoke_grounded_research.py` | CREATE | Live checkpoint — costs Vertex tokens, run by hand. |
+2. **`_ensure_vertex_env()` forwards `.env` into `os.environ` with
+   `setdefault`.** The empirical finding that cost the most time this
+   session: `Settings` never touches `os.environ`, but ADK's native `Gemini`
+   client reads Vertex config *only* from `os.environ`. Confirmed live —
+   `env | grep GOOGLE` returned nothing in the running shell despite a fully
+   correct `.env`. `setdefault` (never clobbers an operator's real shell env)
+   plus an upfront `ValueError` if `GOOGLE_CLOUD_PROJECT` is unset, per hard
+   rule 7. `NOTES_API_DEVIATIONS.md` D14.
 
-**Read before writing.**
+3. **`research_topic()` calls the agent directly via its own `Runner`,
+   not through a consumer's `AgentTool` call.** M4's own scope is "one
+   working grounded-research agent," not "one working consumer" — no
+   consumer exists yet. `build_grounded_research_tool()` is still built and
+   unit-tested (`propagate_grounding_metadata=True`, wraps the given agent),
+   satisfying the Definition of Done's wiring requirement, but the
+   `tool_context.state['temp:_adk_grounding_metadata']` round-trip itself
+   has only been verified against ADK 2.6.2 source, not a live call. Tracked
+   as debt D-15, due whichever milestone wires the first real consumer.
 
-- `phase_1_build_plan.md` §9.6 (lines ~714-736) — the exact snippet and
-  citation-extraction requirement.
-- `NOTES_API_DEVIATIONS.md` D10 — the `propagate_grounding_metadata` finding.
-- `src/specter/core/contracts.py`'s `EvidenceArtifact` — the shape citations
-  must land in.
-- `src/specter/agents/_base.py` — decide whether any of it applies here at
-  all before reusing it (see "Inherited context" above).
+4. **`EvidenceArtifact.extraction_method` is required, not defaulted** —
+   same no-silent-defaults discipline `RiskSignal` established in M3, even
+   though this isn't a strict-mode agent `output_schema` field (nothing
+   forced it). Consistency: every future caller states its evidence's
+   provenance explicitly rather than the codebase silently assuming one.
 
-**Steps.** Not detailed further — genuinely blocked, and writing exact
-tool-call signatures for an untested ADK grounding path would be inventing
-detail per §1.3 ("if you didn't run it, say UNVERIFIED"). The first real
-step once unblocked is the CLAUDE.md ritual: refresh
-`.context/adk-llms-full.txt`, `pip show google-adk`, and verify D10 against
-whatever version is actually installed before writing the agent.
+**Deviations from the Action Plan — say so plainly.**
 
-**Checkpoint.** `python scripts/45_smoke_grounded_research.py` runs one real
-query, prints the response text plus every extracted `EvidenceArtifact`
-(non-empty — an empty citation list on a real grounded response is D10
-resurfacing), and `tests/test_grounded_research.py` passes offline.
+- **`tests/test_router.py::test_grounded_research_routes_to_vertex` was
+  already red at session start**, from the operator's own pre-session `.env`
+  /`config/models.yaml` edit switching the model to `gemini-3.7-flash`
+  without updating the test's hardcoded `"gemini-2.5-flash"` assertion.
+  Fixed as the first action of this session, before any M4 code was written
+  — a stale assertion, not a new bug introduced by this milestone.
+- **The Action Plan's own "Read before writing" pointed at `.context/adk-
+  llms-full.txt`, which had gone stale** (the file at that path now just
+  redirects to `https://adk.dev/llms-full.txt` — the docs moved off the
+  `adk-docs` GitHub repo entirely). Re-fetched from the new location per
+  CLAUDE.md's ritual; the old URL in CLAUDE.md's own instructions is now
+  itself stale and should be updated if anyone edits that file next.
 
-**Traps.**
+**Things the next session must not get wrong.**
 
-- Adding a second tool "temporarily" to debug — don't; use
-  `bypass_multi_tools_limit=True` as the documented fallback if the
-  isolation pattern itself fails on the installed ADK version, not as a way
-  to add more tools.
-- Forgetting `propagate_grounding_metadata=True` on the `AgentTool` wrapper
-  — the call will succeed and look fine, and the citation trail will just be
-  silently empty. Assert non-empty citations in both the test and the smoke
-  script, not just "call succeeded."
+- **Do not build a second Vertex-native agent by copying `_base.py`'s
+  pattern.** Any future bare-`Gemini`-string agent needs its own
+  `_ensure_vertex_env`-style env forwarding — it is not automatic just
+  because `Settings` has the right values. `NOTES_API_DEVIATIONS.md` D14.
+- **`GroundedResearchAgent` must never be attached as a `sub_agent`, and
+  never gets a second tool.** `build_grounded_research_tool()` is the only
+  sanctioned way another agent gets access to it.
+- **The stored citation URIs are Google redirect links, not the source
+  page URL** (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`).
+  Don't build anything that assumes `EvidenceArtifact.stored_path`'s content
+  is a directly-followable URL for a human reviewer. `NOTES_API_DEVIATIONS.md`
+  D15.
+- **The `AgentTool` propagation path (`propagate_grounding_metadata=True`)
+  is unit-tested but not live-verified** (debt D-15). Whoever wires the
+  first consumer must re-check it actually works end to end, not just trust
+  the offline test.
 
-**Definition of done.**
-
-- [ ] `GroundedResearchAgent` has exactly one tool, is never a `sub_agent` of
-      a tool-bearing agent
-- [ ] `AgentTool` wraps it with `propagate_grounding_metadata=True`
-- [ ] A live query produces at least one non-empty `EvidenceArtifact` with
-      `extraction_method="vertex_grounding"`
-- [ ] `pytest`/`ruff`/`mypy` clean
-- [ ] §3 Current State and §4 Carried Debt updated; M5 Action Plan written
-- [ ] Committed as `M4: grounded research`
+---
 
 ---
 
@@ -937,7 +1003,203 @@ banned-vocabulary list — enforced in code, not only in the prompt.
 
 #### Action Plan
 
-*(not yet written)*
+**Goal.** The last two of the plan's seven agents. `Skeptic` argues against
+every signal `graph_investigation`/`enforcement_intel` found; `CaseReporter`
+assembles their combined output into the final `CasePacket` — the artifact
+M9's judge subsystem grades. Plan §9.7, §9.8.
+
+**Inherited context — read this before touching anything.**
+
+- **No orchestrator exists yet.** Plan §9.1 (`Orchestrator`, T2
+  `plan_investigation`, output `InvestigationPlan`) is not scoped into *any*
+  BUILD_MILESTONES.md milestone — not M5, not M6 (`workflow/screening.py`
+  scope is the deterministic `Workflow` graph + `ScoringService`, no LLM
+  planning agent mentioned). This looks like a real gap between this file
+  and plan §9.1, not a deliberate cut — flag it to the operator rather than
+  quietly building it into M5 (out of this milestone's stated scope) or
+  quietly dropping it. Recorded as debt below.
+- **Nothing assembles a "full findings bundle" yet either** — that's also
+  implicitly the orchestrator's job in the plan. M5 calls `graph_investigation
+  .investigate()` and `enforcement_intel.extract()` directly by hand (same
+  pattern M3's own smoke script uses) to get real `GraphFindings`/
+  `EnforcementFindings` to feed `Skeptic`/`CaseReporter` — there is no
+  end-to-end pipeline to run them through until M6.
+- **CLAUDE.md hard rule 1 vs. hard rule 8 — this looks like a contradiction
+  and isn't.** Rule 1: "No LLM produces a number... a number in agent output
+  that isn't in a tool result is a bug." Rule 8: "Scoring is deterministic
+  code, never an agent. The Skeptic influences the score only through a
+  bounded `confidence_adjustment ∈ [-0.4, 0.0]`." Rule 8 is a narrow,
+  explicit carve-out of rule 1: `confidence_adjustment` is a bounded
+  judgment discount, not a fact-number derived from evidence — validate it
+  with `Field(ge=-0.4, le=0.0)` (no `default=`, same pattern
+  `EntityMatchAdjudication.match_probability` already uses successfully,
+  M3) and leave it alone. Don't "fix" this into a deterministic tool call —
+  it's supposed to be the one LLM-influenced number in the system, on a
+  short leash.
+- **D-14** (numeric-grounding check duplicated per-agent, not in a shared
+  `after_model_callback`) **comes due here.** `CaseReporter`'s own
+  no-fabricated-numbers check (plan §9.8) is exactly the second consumer of
+  the same pattern `graph_investigation.py` already implemented
+  (`_numbers_in`/`_numeric_violations` at `graph_investigation.py:95-127`).
+  Extract a generic version rather than copy-pasting a third time. See Step
+  1.
+- **The numeric-grounding pattern in `graph_investigation.py` is
+  field-specific** (`_numeric_violations` reads `output["narration"]` and
+  `output["community_context"]` by hardcoded key) — the generic extraction
+  needs a `text_fields: list[str]` parameter or similar so `CaseReporter`
+  can pass its own narrative field name(s) instead.
+
+**File manifest.**
+
+| Path | Action | Notes |
+|---|---|---|
+| `src/specter/agents/_grounding.py` | CREATE | `numbers_in(text) -> set[str]`, `numeric_violations(claimed_texts: list[str], evidence: dict) -> list[str]` — generalized out of `graph_investigation.py`. |
+| `src/specter/agents/graph_investigation.py` | EDIT | Replace its local `_numbers_in`/`_numeric_violations` with calls into `_grounding.py`. No behavior change — refactor only, existing tests must still pass unmodified. |
+| `src/specter/agents/skeptic.py` | CREATE | T2 `challenge_hypothesis`. No tools (reasoning-only over the findings bundle it's handed) — `tools=[]` to `build_agent`, consistent with the subset-of-`all_tools` pattern M3 established. |
+| `src/specter/agents/case_reporter.py` | CREATE | T2 `synthesize_case`. Assembles `CasePacket` (see Step 3 for the split between the LLM's narrow `output_schema` and the deterministic assembly code around it). |
+| `src/specter/core/contracts.py` | EDIT | `Rebuttal`, `CounterEvidence` (plan §9.7); `CaseNarrative` (LLM output_schema, narrow); `CasePacket` (the assembled artifact — not an agent `output_schema`, so none of the strict-mode no-defaults/no-dict constraints apply to it). |
+| `src/specter/core/banned_vocabulary.py` | CREATE | `BANNED_PHRASES = ("fraudulent", "criminal", "guilty", "proven", "confirmed fraud")`; `find_banned_phrases(text: str) -> list[str]`, case-insensitive regex, word-boundary matched. CLAUDE.md hard rule 9: "enforced by regex post-check, not just prompt instruction." |
+| `prompts/agents/skeptic.md` | CREATE | Role brief — the benign-explanation checklist from plan §9.7 verbatim (multi-tenant building, billing artifact, peer-comparison mismatch, common-name collision, stale source, synthetic contamination, group-practice structure). |
+| `prompts/agents/case_reporter.md` | CREATE | Role brief — controlled vocabulary, `"exhibits N independently observed indicators"` phrasing, explicit reminder of the banned list (belt-and-suspenders with the regex check). |
+| `scripts/48_smoke_judgement_agents.py` | CREATE | Live checkpoint: runs `graph_investigation` + `enforcement_intel` on a synthetic scenario NPI, feeds the result into `skeptic`, then `case_reporter`; prints the assembled `CasePacket`. |
+| `tests/test_grounding.py` | CREATE | Offline: `numbers_in`/`numeric_violations` unit tests (move/extend whatever's implicitly covered by `test_graph_investigation.py` today). |
+| `tests/test_banned_vocabulary.py` | CREATE | Offline: each banned phrase is caught, case-insensitively; a clean narrative returns `[]`; a substring false-positive check (e.g. "guiltily" shouldn't false-match "guilty" — decide word-boundary behavior explicitly and test it). |
+| `tests/test_skeptic.py`, `tests/test_case_reporter.py` | CREATE | Offline evidence-builder tests, same style as `test_entity_resolution.py`/`test_graph_investigation.py` (M3). |
+
+**Read before writing.**
+
+- `phase_1_build_plan.md` §9.7-9.8 (lines ~738-746) — exact scope text,
+  already quoted above.
+- `src/specter/agents/graph_investigation.py` lines 90-180 — the numeric-
+  grounding pattern to generalize, and the `build_evidence`/`investigate`
+  shape to mirror for `skeptic.py`/`case_reporter.py`.
+- `src/specter/core/contracts.py`'s `RiskSignal`, `GraphFindings`,
+  `EnforcementFindings`, `CaseLegalStatus`, `EvidenceArtifact` — everything
+  `CasePacket` needs to reference or embed.
+- `src/specter/tools/evidence_tools.py`'s `validate_citations` — `CaseReporter`
+  must call this before returning; it already takes a flat `source_ids: list[str]`
+  (M2 built it exactly for this, unused until now).
+- CLAUDE.md hard rules 1, 3, 4, 5, 6, 8, 9 — this milestone touches more of
+  them at once than any other so far.
+
+**Steps.**
+
+1. **Extract `agents/_grounding.py` first**, refactor `graph_investigation.py`
+   to use it, run `pytest tests/test_graph_investigation.py -q` — must still
+   pass unmodified before writing anything new. This clears D-14 as a
+   byproduct rather than a separate pass.
+
+2. **`Skeptic`.** Draft schema:
+
+   ```python
+   class Rebuttal(SpecterModel):
+       signal_type: str                    # echoes RiskSignal.signal_type — never invented
+       benign_explanation: str | None
+       no_plausible_benign_explanation: bool
+       reasoning: str
+
+   class CounterEvidence(AgentOutput):
+       per_signal: list[Rebuttal]
+       unresolved_conflicts: list[str]
+       confidence_adjustment: float = Field(ge=-0.4, le=0.0)
+   ```
+
+   Evidence bundle: the `GraphFindings`/`EnforcementFindings` this milestone's
+   smoke script already ran by hand, serialized the same way
+   `graph_investigation.build_evidence` does. `challenge()` should validate
+   that `per_signal` covers every `signal_type` actually present in the
+   input `GraphFindings.signals` — an LLM silently dropping a signal from
+   its rebuttal list is a real failure mode worth catching, same spirit as
+   the numeric-grounding check (UNVERIFIED whether this needs a retry loop
+   like `graph_investigation`'s or a hard raise; decide once you see real
+   output).
+
+3. **`CaseReporter` — the two-part split.** Don't make the LLM's
+   `output_schema` *be* `CasePacket`. Rule 1 means fields like
+   `signals`/`citations`/`legal_status_per_match` must be echoed from
+   already-computed data, not regenerated by the model, so let the LLM
+   produce only what's genuinely generative — the narrative — and assemble
+   the rest in Python:
+
+   ```python
+   class CaseNarrative(AgentOutput):
+       narrative: str                      # the controlled-vocabulary prose
+       exhibited_indicators_summary: str   # e.g. "exhibits 3 independently observed indicators" — count must be echoed from len(signals), not computed by the model
+
+   class CasePacket(SpecterModel):         # NOT an AgentOutput — assembled, not model-produced
+       provider_npi: str
+       narrative: str
+       signals: list[RiskSignal]
+       enforcement_matches: list[str]
+       legal_status_per_match: list[CaseLegalStatus]
+       counter_evidence: CounterEvidence
+       citation_report: CitationReport
+       created_at: datetime
+   ```
+
+   `synthesize_case()`: run the `CaseNarrative` agent call, run
+   `find_banned_phrases()` on `narrative` (raise if non-empty — CLAUDE.md
+   hard rule 9 says regex-enforced, not advisory), run
+   `numeric_violations()` against the same evidence bundle passed in, run
+   `validate_citations()` against every `source_ids` collected off
+   `signals`/enforcement matches/counter-evidence, then construct
+   `CasePacket` directly in Python from the already-validated pieces. This
+   draft schema is a starting point, not gospel — validate every field
+   against strict-mode/ADK reality the way M3/M4 both had to (D5/D13 were
+   both discovered live, not predicted); expect at least one field shape to
+   change once you actually call it.
+
+4. **Banned vocabulary.** Word-boundary, case-insensitive:
+   `re.compile(r"\b(" + "|".join(re.escape(p) for p in BANNED_PHRASES) + r")\b", re.IGNORECASE)`.
+   Decide and test the "guiltily"-contains-"guilty" edge case explicitly —
+   `\b` after "guilty" won't match inside "guiltily" (no word boundary
+   between "y" and "i"), which is probably the right call, but prove it
+   with a test rather than assuming.
+
+**Checkpoint.** `pytest tests/ -q` all green (offline suite grows by ~4
+files); `ruff`/`mypy` clean; `python scripts/48_smoke_judgement_agents.py`
+against a real synthetic scenario NPI (e.g. S03, already used by M3's own
+smoke script) prints a `CounterEvidence` with at least one `Rebuttal` per
+input signal, then a `CasePacket` whose `citation_report.all_resolved is
+True` and whose narrative contains none of the banned phrases (assert this
+in the script, don't just eyeball it).
+
+**Traps.**
+
+- Giving `CaseReporter`'s `output_schema` the full `CasePacket` shape
+  directly — tempting, and wrong twice over: it would let the model
+  restate signal counts/citations itself (rule 1), and `CasePacket` isn't
+  an `AgentOutput` in the first place (nothing forces strict-mode shape
+  constraints on it, which is exactly why assembling it in plain Python is
+  easier, not harder).
+- Forgetting `CounterEvidence.confidence_adjustment`'s bound is enforced by
+  `Field(ge=-0.4, le=0.0)` at the schema level — that's necessary but not
+  sufficient; nothing stops a future `workflow/state.ScoringService` (M6)
+  from misusing a correctly-bounded value. Note in `CasePacket`'s docstring
+  that this field is *the only* LLM-influenced number the scorer may read.
+- `find_banned_phrases` running on the raw LLM output before the citation/
+  numeric checks — order matters for a useful error message (a banned-word
+  violation is a content problem, worth surfacing before spending a retry
+  cycle on a citation problem), but don't let one check's exception path
+  swallow the others silently. Decide and document the check order in
+  `synthesize_case`'s docstring.
+
+**Definition of done.**
+
+- [ ] `Skeptic` produces a `Rebuttal` per input signal, `confidence_adjustment`
+      bounded and validated by the schema
+- [ ] `CaseReporter` assembles a `CasePacket` with `validate_citations()`
+      passing and zero banned phrases, enforced by a regex check that raises
+      (not just an instruction)
+- [ ] The numeric-grounding check is shared code (`agents/_grounding.py`),
+      used by both `graph_investigation.py` and `case_reporter.py` — D-14
+      cleared
+- [ ] `pytest`/`ruff`/`mypy` clean; existing `test_graph_investigation.py`
+      still passes unmodified after the refactor
+- [ ] §3 Current State and §4 Carried Debt updated (including a decision or
+      an explicit escalation on the missing-Orchestrator-agent gap); M6
+      Action Plan written
+- [ ] Committed as `M5: judgement agents`
 
 ---
 

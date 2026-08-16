@@ -25,15 +25,15 @@ def driver() -> Iterator[Driver]:
 
 
 def test_store_artifact_writes_file_and_hashes_content(tmp_path: Path) -> None:
-    artifact = store_artifact("some evidence text", "text/plain", "doj", tmp_path)
+    artifact = store_artifact("some evidence text", "text/plain", "doj", tmp_path, "direct")
     assert artifact.stored_path.exists()
     assert artifact.stored_path.read_text() == "some evidence text"
     assert len(artifact.artifact_id) == 64  # sha256 hex digest
 
 
 def test_store_artifact_same_content_same_id(tmp_path: Path) -> None:
-    a = store_artifact("identical content", "text/plain", "doj", tmp_path)
-    b = store_artifact("identical content", "text/plain", "leie", tmp_path)
+    a = store_artifact("identical content", "text/plain", "doj", tmp_path, "direct")
+    b = store_artifact("identical content", "text/plain", "leie", tmp_path, "direct")
     assert a.artifact_id == b.artifact_id
 
 
@@ -57,7 +57,7 @@ def test_validate_citations_flags_nonexistent_graph_node(driver: Driver, tmp_pat
 
 
 def test_validate_citations_resolves_stored_artifact(driver: Driver, tmp_path: Path) -> None:
-    artifact = store_artifact("evidence content", "text/plain", "doj", tmp_path)
+    artifact = store_artifact("evidence content", "text/plain", "doj", tmp_path, "direct")
     report = validate_citations([artifact.artifact_id], driver, tmp_path)
     assert report.all_resolved
 

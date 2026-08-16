@@ -32,7 +32,11 @@ _GRAPH_LABEL_KEY = {
 
 
 def store_artifact(
-    content: str, content_type: str, source_id: str, evidence_dir: Path
+    content: str,
+    content_type: str,
+    source_id: str,
+    evidence_dir: Path,
+    extraction_method: str,
 ) -> EvidenceArtifact:
     artifact_id = sha256_text(content)
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +46,7 @@ def store_artifact(
     return EvidenceArtifact(
         artifact_id=artifact_id, content_type=content_type, source_id=source_id,
         stored_path=stored_path, created_at=datetime.now(UTC),
+        extraction_method=extraction_method,
     )
 
 

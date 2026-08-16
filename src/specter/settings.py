@@ -46,12 +46,12 @@ class Settings(BaseSettings):
     # --- Vertex (grounding only) ---
     google_genai_use_vertexai: bool = Field(default=True, alias="GOOGLE_GENAI_USE_VERTEXAI")
     google_cloud_project: str | None = Field(default=None, alias="GOOGLE_CLOUD_PROJECT")
-    google_cloud_location: str = Field(default="us-central1", alias="GOOGLE_CLOUD_LOCATION")
+    google_cloud_location: str = Field(default="global", alias="GOOGLE_CLOUD_LOCATION")
     google_application_credentials: Path | None = Field(
         default=None, alias="GOOGLE_APPLICATION_CREDENTIALS"
     )
     vertex_grounding_model: str = Field(
-        default="gemini-2.5-flash", alias="VERTEX_GROUNDING_MODEL"
+        default="gemini-3.7-flash", alias="VERTEX_GROUNDING_MODEL"
     )
 
     # --- Run control ---

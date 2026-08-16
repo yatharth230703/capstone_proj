@@ -27,6 +27,9 @@ Currently defined:
 - EntityMatchAdjudication, GraphFindings, EnforcementFindings (M3 of
   BUILD_MILESTONES.md, plan §9.3-9.5 `agents/entity_resolution.py`,
   `agents/graph_investigation.py`, `agents/enforcement_intel.py`)
+- GroundedResearchResult (M4 of BUILD_MILESTONES.md, plan §9.6
+  `agents/grounded_research.py`); `EvidenceArtifact` gained a required
+  `extraction_method` field in the same milestone
 """
 
 from __future__ import annotations
@@ -351,13 +354,31 @@ class MatchProposal(SpecterModel):
 
 
 class EvidenceArtifact(SpecterModel):
-    """Output of `tools/evidence_tools.store_artifact` (plan §8)."""
+    """Output of `tools/evidence_tools.store_artifact` (plan §8). CLAUDE.md
+    M4: grounded-research citations set `extraction_method="vertex_grounding"`;
+    every other caller states its own method explicitly (e.g. `"direct"`) —
+    no default, same no-silent-defaults discipline as `RiskSignal` (M3).
+    """
 
     artifact_id: str
     content_type: str
     source_id: str
     stored_path: Path
     created_at: datetime
+    extraction_method: str
+
+
+class GroundedResearchResult(SpecterModel):
+    """Output of `agents/grounded_research.research_topic` (plan §9.6). Not
+    an ADK `output_schema` — this agent has no structured output, only a
+    narrative plus its citation trail — so it carries none of the
+    strict-mode no-defaults constraints that apply to `RiskSignal`/M3.
+    """
+
+    query: str
+    model: str
+    narrative: str
+    citations: list[EvidenceArtifact]
 
 
 class Citation(SpecterModel):

@@ -222,6 +222,20 @@ Two `Workflow` behaviours worth knowing before M6:
 
 **Found:** M1 (research only). **Affects:** M4.
 
+**M4 update:** the source-level claim is confirmed against the installed
+2.6.2 — `tool_context.state['temp:_adk_grounding_metadata']` is set at
+`agent_tool.py:325`, gated on `self.propagate_grounding_metadata`, exactly
+as described below. **Not yet exercised live**, though: M4's own checkpoint
+(`agents/grounded_research.research_topic`) calls the isolated agent
+directly via its own `Runner`, reading `event.grounding_metadata` straight
+off the event stream — that path works, confirmed live, 7/7 real citations.
+Nothing in M4 actually built a *consumer* agent that calls
+`build_grounded_research_tool()`'s `AgentTool` and reads
+`temp:_adk_grounding_metadata` back out of its own `tool_context.state`;
+that only happens once M5/M9 wires a real consumer. Re-verify the
+propagation path live at that point rather than assuming the source read
+here is enough.
+
 `AgentTool.run_async` discards the child agent's `grounding_metadata` unless
 constructed with `propagate_grounding_metadata=True`, which stashes it at
 `tool_context.state['temp:_adk_grounding_metadata']`
@@ -302,3 +316,64 @@ Resolution: any per-key mapping in an agent `output_schema` must be a
 "no defaults" constraint's sibling — both are strict-mode shape limits that
 only surface as a 400 at run time, not at schema-build time. Watch for this
 whenever a future agent schema's natural shape is "one value per key."
+
+---
+
+## D14 — ADK's native `Gemini` model reads Vertex config from `os.environ`, not from `Settings`
+
+**Found:** M4, live. **Affects:** `agents/grounded_research.py`, any future
+agent that uses a bare `Gemini`/`Vertex` model string instead of `LiteLlm`.
+
+`Settings` (pydantic-settings) reads `.env` into a typed Python object; it
+never calls `os.environ[...] = ...`. Every Azure agent doesn't care, because
+`ModelRouter._transport()` passes `api_base`/`api_key` explicitly into the
+`LiteLlm` constructor. But `google_search` only works with ADK's *native*
+`Gemini` model class (D10's "single tool per agent" note), which `LlmAgent`
+resolves automatically from a bare `"gemini-*"` model string via
+`LLMRegistry`. That native class's `api_client` property builds a
+`google.genai.Client()` that reads `GOOGLE_GENAI_USE_VERTEXAI`,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and
+`GOOGLE_APPLICATION_CREDENTIALS` straight out of `os.environ`
+(`google_llm.py:337-362`).
+
+Confirmed live: with `.env` populated but `os.environ` untouched,
+`env | grep GOOGLE` in the running shell returns nothing — the client would
+silently fall back to whatever `google-genai` defaults to (AI Studio /
+unauthenticated) rather than raising. `agents.grounded_research
+._ensure_vertex_env()` forwards the four settings into `os.environ` with
+`setdefault` (never clobbers a value an operator's shell already set) before
+constructing the agent, and raises `ValueError` up front if
+`GOOGLE_CLOUD_PROJECT` is unset — hard rule 7, fail loudly, don't let a
+misconfigured client silently pick the wrong backend.
+
+`Gemini` also exposes a `client_kwargs: dict` field that merges straight
+into the `Client(**kwargs)` call — passing `vertexai=True, project=...,
+location=...` there would avoid the global `os.environ` mutation entirely,
+but `credentials` still needs Application Default Credentials to find the
+service-account file, which in practice means `GOOGLE_APPLICATION_
+CREDENTIALS` has to be a real env var anyway. Not worth the extra
+indirection for a single field; `setdefault`-based forwarding is simpler and
+matches the plan's own framing ("Vertex, via GOOGLE_GENAI_USE_VERTEXAI").
+
+---
+
+## D15 — Google Search grounding URIs are Google redirect links, not the source page URL
+
+**Found:** M4, live. **Affects:** `agents/grounded_research.py`, any human
+or downstream process reading a `vertex_grounding` `EvidenceArtifact`.
+
+`grounding_chunks[i].web.uri` on this deployment (`gemini-3.7-flash`,
+Vertex) is not the cited page's real URL — it's a
+`vertexaisearch.cloud.google.com/grounding-api-redirect/...` tracking link
+that resolves to the real source only when actually followed (and per
+ADK's own docs, these are meant to be displayed as Search suggestion UI in
+a production app, not treated as a stable citation target). `web.title` is
+often just the bare domain (e.g. `"hhs.gov"`), not a page title.
+
+This doesn't break `check_citation_validity` (M9) — that check only
+confirms a `source_ids` entry resolves to a stored `EvidenceArtifact`, and
+it does, regardless of what's inside it. It matters for anyone (human
+reviewer, `CaseReporter`) who expects the stored artifact content to be a
+directly-followable source URL. Recorded rather than "fixed", since there
+is no direct-URL field available in `GroundingChunkWeb` to substitute —
+`domain` is the closest thing to a stable, human-readable label.
