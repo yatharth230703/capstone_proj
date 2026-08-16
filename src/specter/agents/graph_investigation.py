@@ -20,20 +20,23 @@ pluggable per agent, so the check here is a functionally equivalent
 post-hoc pass in `investigate()`: extract every numeric literal from
 `narration`/`community_context` via regex, assert each appears in the
 evidence bundle already gathered for this call, quote violations back and
-retry once, raise on a second violation. `judge/deterministic_checks.py`
-(M9) will do the authoritative version of this same check.
+retry once, raise on a second violation. The generic extract/compare logic
+lives in `agents/_grounding.py` (M5, shared with `case_reporter.py` —
+BUILD_MILESTONES.md debt D-14); this module keeps only the
+`narration`/`community_context`-specific wrapper and the retry loop.
+`judge/deterministic_checks.py` (M9) will do the authoritative version of
+this same check.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 
 import structlog
 from neo4j import Driver
 
 from specter.agents._base import AgentRuntime, build_agent, run_agent
+from specter.agents._grounding import numeric_violations as _generic_numeric_violations
 from specter.core.contracts import (
     AgentRunResult,
     EvidenceBundle,
@@ -92,18 +95,11 @@ _TASK_INSTRUCTION = (
     "compute, round, or convert any number yourself."
 )
 
-_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
-
 class NumericGroundingError(SpecterError):
     """A number in `narration`/`community_context` never appeared anywhere in
     the evidence bundle this call was given — CLAUDE.md hard rule 1. Raised
     after one corrective retry already failed to fix it.
     """
-
-
-def _numbers_in(text: str) -> set[str]:
-    return set(_NUMBER_RE.findall(text))
 
 
 def build_evidence(driver: Driver, npi: str, thresholds: ScreeningThresholds) -> EvidenceBundle:
@@ -124,9 +120,9 @@ def build_evidence(driver: Driver, npi: str, thresholds: ScreeningThresholds) ->
 
 
 def _numeric_violations(output: dict[str, object], evidence: dict[str, object]) -> list[str]:
-    grounded = _numbers_in(json.dumps(evidence, sort_keys=True, default=str))
-    claimed = _numbers_in(str(output["narration"])) | _numbers_in(str(output["community_context"]))
-    return sorted(claimed - grounded)
+    return _generic_numeric_violations(
+        [str(output["narration"]), str(output["community_context"])], evidence
+    )
 
 
 async def investigate(
