@@ -28,6 +28,7 @@ from specter.core.contracts import (
     EvidenceBundle,
     SourceManifest,
 )
+from specter.core.enums import Verdict
 from specter.core.errors import SpecterError
 
 logger = structlog.get_logger(__name__)
@@ -50,7 +51,7 @@ class SnapshotError(SpecterError):
     """
 
 
-def _observed_facts(source_dir: Path, manifest: SourceManifest) -> dict[str, Any]:
+def observed_facts(source_dir: Path, manifest: SourceManifest) -> dict[str, Any]:
     """Deterministic checks over one source's parquet. These are the numbers
     the agent is allowed to reason about; it computes none of them itself.
     """
@@ -104,7 +105,7 @@ def build_evidence(snapshot_dir: Path) -> EvidenceBundle:
                 "schema_version": manifest.schema_version,
                 "checksum_sha256": manifest.checksum_sha256,
                 "coverage": manifest.coverage,
-                "observed": _observed_facts(manifest_path.parent, manifest),
+                "observed": observed_facts(manifest_path.parent, manifest),
             }
         )
     sources.sort(key=lambda source: str(source["source_id"]))
@@ -138,3 +139,24 @@ async def assess(snapshot_dir: Path, runtime: AgentRuntime) -> AgentRunResult:
         evidence_chars=len(json.dumps(evidence.evidence, sort_keys=True, default=str)),
     )
     return await run_agent(agent, TASK_CLASS, evidence, runtime, DataQualityReport)
+
+
+def deterministic_verdict(
+    sources: list[dict[str, Any]], freshness_threshold_days: int
+) -> Verdict:
+    """What `workflow/screening.py`'s gate branches on (BUILD_MILESTONES.md
+    D-5) — never `DataQualityReport.verdict`. The LLM call in `assess()`
+    still runs, for `blocking_reasons`/narrative a human reads, but a T1 call
+    at `temperature=0.1` is not a fit gate condition for a pipeline that must
+    not flip pass/fail run to run on identical input.
+
+    Each `sources` entry is one of `build_evidence`'s per-source dicts (has
+    `freshness_status` and an `observed` sub-dict from `observed_facts`).
+    """
+    if any(not s["observed"]["row_count_matches_manifest"] for s in sources):
+        return Verdict.FAIL
+    stale = any(s["observed"]["snapshot_age_days"] > freshness_threshold_days for s in sources)
+    not_current = any(s["freshness_status"] != "current" for s in sources)
+    if stale or not_current:
+        return Verdict.WARN
+    return Verdict.PASS_

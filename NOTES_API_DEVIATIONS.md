@@ -377,3 +377,101 @@ reviewer, `CaseReporter`) who expects the stored artifact content to be a
 directly-followable source URL. Recorded rather than "fixed", since there
 is no direct-URL field available in `GroundingChunkWeb` to substitute —
 `domain` is the closest thing to a stable, human-readable label.
+
+---
+
+## D16 — `google.adk.workflow.Workflow`: real construction/runtime API (extends D9)
+
+**Found:** M6, both by reading `google/adk/workflow/` source in full and by
+running a throwaway two-node experiment before writing the real graph.
+**Affects:** `workflow/screening.py`.
+
+D9 (M1, research-only) already established that `Workflow` must be the root
+and that an unmatched conditional route is a silent `logging.warning`. This
+entry is what M6 actually needed on top of that, confirmed against 2.6.2:
+
+- **`Workflow(...)` requires an explicit `name=` kwarg** (Pydantic-required),
+  in addition to `edges=`. Nodes are inferred automatically from the edge
+  list at construction time (`Graph.model_post_init` calls
+  `validate_graph()`) — do not pass `nodes=` explicitly.
+- **Chain-tuple DSL**: `edges` is a list of `Edge` objects or tuples —
+  `(a, b, c)` becomes `a→b, b→c`; a `dict` element is a routing map
+  (`{route_value: node, DEFAULT_ROUTE: node}`); a bare async function is
+  auto-wrapped into a `FunctionNode` the first time it's seen, **deduped by
+  `id()` across the whole edge list** — reusing the same Python function
+  object in multiple tuples correctly refers to one graph node, not a
+  duplicate.
+- **Node signature**: `async def f(ctx: Context, node_input: T) -> R`.
+  `node_input` is special-cased to always receive the upstream node's raw
+  return value directly, in-process — every *other* parameter is looked up
+  in `ctx.state` (session state) instead. Infra objects (a `neo4j.Driver`,
+  `AgentRuntime`, thresholds, `evidence_dir`) should be bound via closure at
+  graph-construction time, not threaded through state.
+- **Fan-out is native**: `@node(parallel_worker=True, max_parallel_workers=N)`
+  wraps a node in `_ParallelWorker`; if it receives a list as `node_input`
+  it runs the wrapped function once per item, capped at `N` truly
+  in-flight (`asyncio.wait(..., return_when=FIRST_COMPLETED)`, refilling as
+  slots free — not batch-of-N-then-wait), returning results in input order.
+  **This cap is per-node, not graph-wide** — multiple fan-out nodes off the
+  same upstream output run *concurrently* with each other, each independently
+  capped at `N`, so N separate 4-way fan-outs can produce up to 4×N
+  simultaneous calls system-wide. Fan-out is also **fail-fast**: the first
+  raised exception cancels every other in-flight item in that batch.
+- **`JoinNode(name=...)` waits for *every* node listed as its predecessor in
+  the edge list to reach `COMPLETED`**, even one that's structurally
+  unreachable in the branch actually taken (e.g. the untaken side of a
+  conditional route). Confirmed by direct experiment: such a `JoinNode`
+  never fires — no error, no timeout — the run just ends without its
+  output. Never declare a `JoinNode`'s predecessors across mutually
+  exclusive conditional branches. On success, its output is
+  `{predecessor_node_name: predecessor_output, ...}`, a dict keyed by name.
+- **`DEFAULT_ROUTE` confirmed verbatim** (`_graph.py:172-183`): a route
+  value that matches nothing, with no `DEFAULT_ROUTE` edge present, hits
+  `logger.warning(...)` and the branch simply ends. Every routing dict
+  needs a `DEFAULT_ROUTE` key, full stop.
+- **Running it**: `Runner(node=workflow, app_name=..., session_service=...)`
+  — **not** `Runner(agent=workflow, ...)`. `Workflow` is a `BaseNode`, not a
+  `BaseAgent`; `Runner.__init__` has a separate `node=` parameter exactly
+  for this (`Runner._resolve_app`, `runners.py:326-331`). `agent=` would
+  type-check under `Optional[BaseAgent]`'s duck typing but silently
+  misroutes. `run_async(...)` yields the same `AsyncGenerator[Event, None]`
+  as any agent run; the terminal node's output lands on the last event with
+  a non-`None` `.output`.
+
+---
+
+## D17 — L1 response cache stores a response before validating it
+
+**Found:** M6, live. **Affects:** `agents/_llm_call.py` (`_invoke`),
+`llm/response_cache.py`. Not fixed — outside M6's file list; tracked as
+BUILD_MILESTONES.md carried debt D-18.
+
+`_invoke` (`_llm_call.py:162-172`) calls `runtime.cache.set(cache_key,
+LlmResult(content=final_text, ...))` on every live call, unconditionally —
+`_validate_output(...)` (which parses `final_text` as JSON and validates it
+against the agent's `output_schema`) doesn't run until *after* the cache
+write, at line 201. A transient truncated/malformed response from the
+underlying model therefore gets written to Redis as a "successful" L1 entry
+before anyone checks it's well-formed. Every subsequent call sharing that
+exact cache key (same agent, same prompt content, same prefix fingerprint —
+not scoped by `run_id`, by design, so L1 hits work *across* runs) replays
+the identical broken text and raises the identical `AgentOutputError`
+forever, with no self-healing path.
+
+Hit live: `graph_investigation` on a real NPPES provider raised
+`AgentOutputError: response was not valid JSON: Unterminated string
+starting at: line 1 column 6102` — then reproduced *byte-for-byte
+identically* (same message, same character offset) across 3 separate
+`python scripts/40_screen.py` invocations, which is what exposed it as a
+caching bug rather than genuine model flakiness (a real retry, e.g. via
+`redis-cli -p 6380 -n 0 flushdb` between attempts, succeeded immediately
+with no code change).
+
+Recommended fix, for whoever picks up D-18: call `_validate_output` before
+`runtime.cache.set`, or wrap the cache write in a check that skips it on a
+validation failure. Do not cache on the parsed/validated side only as a
+workaround without also handling the retry path in `run_agent`'s escalation
+logic, which currently assumes `_invoke`'s two return paths (cache hit / live
+call) are otherwise symmetric.
+
+---

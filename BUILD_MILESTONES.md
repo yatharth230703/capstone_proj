@@ -180,7 +180,7 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 | **M3** | Investigation agents | EntityResolution, GraphInvestigation, EnforcementIntel | `DONE` |
 | **M4** | Grounded research | Vertex Gemini agent + `AgentTool` isolation, grounding citations | `DONE` |
 | **M5** | Judgement agents | Skeptic, CaseReporter, `CasePacket`, banned-vocabulary enforcement | `DONE` |
-| **M6** | Orchestration | `workflow/screening.py`, `ScoringService`, `scripts/40_screen.py` | `TODO` |
+| **M6** | Orchestration | `workflow/screening.py`, `ScoringService`, `scripts/40_screen.py` | `DONE` |
 | **M7** | MCP integration | `tools/mcp_tools.py` — Playwright + Neo4j Cypher guardrails | `TODO` |
 | **M8** | Observability | `obs/tracing.py`, `obs/dashboard.py`, `cli.py` | `TODO` |
 | **M9** | Judge subsystem | `judge/` — detection eval, deterministic checks, rubric judge, report | `TODO` |
@@ -192,14 +192,14 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: end of M5.**
+**Last updated: end of M6.**
 
 ### Verified green
 
 ```
-pytest tests/ -q          176 passed
+pytest tests/ -q          196 passed
 ruff check src/ tests/ scripts/   All checks passed
-mypy src/                 Success: no issues found in 50 source files
+mypy src/                 Success: no issues found in 52 source files
 docker compose ps         neo4j, phoenix, redis — all healthy
 ```
 
@@ -342,9 +342,9 @@ built-in tool — see M4 below), constructed by
 "grounded_research")` is still used, but only to read the model name out of
 `config/models.yaml` — not to build a `LiteLlm`.
 
-Still empty: `workflow/`, `judge/`, `obs/`. Missing entirely: `cli.py`,
-`tools/mcp_tools.py`, `README.md`, `scripts/00_bootstrap.sh`,
-`scripts/40_screen.py`, `scripts/50_judge.py`.
+`workflow/` is populated as of M6 (`state.py`, `screening.py`). Still empty:
+`judge/`, `obs/`. Missing entirely: `cli.py`, `tools/mcp_tools.py`,
+`README.md`, `scripts/00_bootstrap.sh`, `scripts/50_judge.py`.
 
 ### GraphRetriever wiring — the decision M2 left open, resolved
 
@@ -538,10 +538,60 @@ DOJ corpus (debt D-2), so the live checkpoint only exercised a
 check once M7 refills the DOJ corpus.
 
 D-16 (the plan §9.1 Orchestrator agent, missing from every milestone's
-scope) is still open — M5 didn't touch it. M6's own Action Plan (below)
-proposes a deterministic substitute for `cohort_select`/fan-out rather than
-building the plan's LLM planning agent, flagged there as a decision for the
-operator to confirm or override.
+scope) is still open — M5 didn't touch it. M6 resolved it deliberately
+(below), not by building the LLM agent.
+
+### Screening workflow (M6) — live-verified end to end
+
+`workflow/screening.build_screening_workflow` is a `google.adk.workflow.
+Workflow` graph, root-level (never an `LlmAgent` sub-agent per D9):
+`data_quality_gate → {fail: halt_node, DEFAULT_ROUTE: cohort_select_node} →
+screen_provider (max_parallel_workers=4)`. `screen_provider` runs
+entity_resolution (over this provider's own candidate pairs, via
+`workflow/state.build_candidate_pairs`), graph_investigation,
+enforcement_intel, skeptic, `workflow/state.ScoringService.score`, and
+case_reporter *sequentially* inside one node body per cohort member — a
+deliberate collapse of plan §10's three-separate-fan-out pseudocode, because
+`max_parallel_workers` is a per-node cap in ADK 2.6.2, not graph-wide,
+verified by direct experiment before writing the real graph. `scripts/
+40_screen.py --limit N` is the entry point; `data/cases/<npi>.json` is the
+output.
+
+`ScoringService` (`workflow/state.py`) implements plan §10's five
+dimensions (`identity_integrity`, `network_association`, `adverse_history`,
+`evidence_quality`, `corporate_complexity`) plus the escalation gate
+(`>=3 independent signal families AND (gov source OR strong quantitative
+anomaly) AND no unresolved entity-match conflict AND evidence freshness`),
+all deterministic — `CounterEvidence.confidence_adjustment` (Skeptic's
+bounded `[-0.4, 0.0]` discount) is the only LLM-influenced number it reads,
+and it touches only `evidence_quality` (CLAUDE.md hard rule 8).
+
+The data-quality gate branches on `agents.data_quality.deterministic_verdict`
+(row-count-matches-manifest + `freshness_status`), not the LLM's
+`DataQualityReport.verdict` — D-5 cleared. Checked live against the current
+real snapshot: `deterministic_verdict` returns `warn` (both
+`state_medicaid_fl`/`state_medicaid_tx` have `freshness_status="unknown"`;
+row counts already match their manifests, so nothing triggers `fail`) — the
+gate passes through to `cohort_select`, it does not halt. The `halt_node`
+path itself is proven by 5 offline tests (`tests/test_data_quality.py`),
+not by a live `FAIL`, since the real snapshot doesn't currently produce one.
+
+Live checkpoint (`scripts/40_screen.py --limit 2`, real Azure calls, real
+NPPES cohort providers `1003001439`/`1003008756`): both produced
+`priority_tier=low` (zero fired signals — real, clean providers, correct
+output), `citation_report.all_resolved=True`, `CasePacket`s written to
+`data/cases/`. `cohort_select("332", ["FL","TX","CA"])` returns 6,944 real
+providers, live-verified — **and 0 synthetic scenario providers** (D-17:
+synthetic providers carry no `HAS_TAXONOMY` edges, so they're invisible to
+this filter). A cohort-based run never touches S01-S10; use `scenario_id`
+directly for that, as M3/M5's smoke scripts already do.
+
+**D-18, found live this milestone:** `agents/_llm_call._invoke` caches a
+model response to L1 Redis *before* validating it as JSON. A transient
+truncated response from a real live call permanently poisoned that cache
+key — reproduced identically 3 times in a row before being traced to the
+cache (not the model) and cleared with `redis-cli -p 6380 -n 0 flushdb`.
+Not fixed (outside M6's file list); see §4.
 
 ---
 
@@ -551,9 +601,9 @@ operator to confirm or override.
 |---|---|---|---|
 | D-1 | `state_medicaid_fl` and `state_medicaid_tx` ingest **0 rows** — both sources are bot-blocked | Needs the Playwright MCP fetch path, which doesn't exist yet | **M7** |
 | D-2 | `doj` ingests **1 row**, loaded as 1 `EnforcementCase` node (M2) — the *loader* half is done, the *corpus size* half is still a gap | Semantic retrieval works against a 1-row corpus (`retrieval.semantic()` verified live), but 1 row is not a real corpus for the Enforcement agent to search | **M7** (refill via Playwright MCP) |
-| D-3 | `synthetic_providers` has 186 rows; plan §5.5 specifies 50 scenario + 150 controls = 200 | Not blocking; verify the S01–S10 scenario coverage is intact | **M6** |
+| ~~D-3~~ | ~~`synthetic_providers` has 186 rows; plan §5.5 specifies 50 scenario + 150 controls = 200~~ | **Checked against the live graph M6, not blocking.** All ten scenario_ids present — S01:5, S02:5, S03:8, S04:4, S05:2, S06:2, S07:1, S08:1, S09:2, S10:6 = 36 scenario rows + 150 controls = 186. Full scenario-ID coverage; scenario row *count* (36) is under the plan's 50-scenario figure, but nothing currently depends on hitting exactly 50. | — |
 | ~~D-4~~ | ~~Amendment 3 geocoding not implemented~~ | **Cleared M3.** `data/reference/zcta_centroids.csv` (33,791 rows), `zip_centroid()`/`haversine_km()`, `geographic_spread` rewritten to use ZIP centroids. Verified live against S09. | — |
-| D-5 | The Data Quality verdict is **not deterministic** — the same snapshot returned `warn` on one run and `fail` on the next, because tier T1 runs at `temperature=0.1` | A pipeline gate should not flip. Options: per-agent temperature override, or make the gate honour the deterministic `ValidationReport` verdict and treat the agent as advisory | **M6** |
+| ~~D-5~~ | ~~The Data Quality verdict is not deterministic~~ | **Cleared M6.** `agents/data_quality.deterministic_verdict(sources, freshness_threshold_days) -> Verdict` — pure function over `row_count_matches_manifest`/`freshness_status`, unit-tested for FAIL/WARN/PASS (`tests/test_data_quality.py`). `workflow/screening.py`'s gate branches on this, never `DataQualityReport.verdict`; the LLM call still runs for the human-readable narrative only. | — |
 | ~~D-6~~ | ~~No agent-level escalation~~ | **Cleared M3.** `run_agent` calls `router.should_escalate`; proven offline (deterministic test) and exercised live (didn't fire — real model output landed outside the escalation band, which is expected, not a gap). | — |
 | D-7 | Phoenix container runs but nothing exports to it. `_base.py` sets OTel span attributes with no tracer provider registered, so they go nowhere | Tracing setup is its own milestone | **M8** |
 | D-8 | `price_*` fields in `config/models.yaml` are all `null`, so `cost_usd` is always `NULL` | Deliberate — plan §7.4: "a wrong cost chart is worse than no cost chart". Operator must fill in real pricing | **M10** |
@@ -561,7 +611,9 @@ operator to confirm or override.
 | D-10 | `EnforcementCase.legal_status` loaded by M2's `graph/enforcement_loader.py` still comes from the **regex keyword heuristic** (`infer_legal_status`) on the graph node itself — **clarified, not fully cleared, M5.** `case_reporter.synthesize` now embeds the agent's real per-match adjudication (`EnforcementFindings.legal_status_per_match`) directly into `CasePacket.legal_status_per_match` — the *case packet*, not the graph node, is the system of record for an investigation's adjudicated legal status. The graph node's own `legal_status` property is left as the loader's coarse heuristic deliberately (a default/fallback for queries that never ran the agent), not an oversight. | Whether the graph node should *also* be updated (vs. staying loader-only) is a separate, lower-stakes question — nothing currently reads the stale node property for a screened provider, since `CasePacket` is what gets reported | not urgent — revisit only if something starts reading `EnforcementCase.legal_status` directly for a screened provider |
 | ~~D-14~~ | ~~Numeric-grounding check duplicated per-agent~~ | **Cleared M5.** `agents/_grounding.py` — `numbers_in`/`numeric_violations`, both pure functions. `graph_investigation._numeric_violations` is now a thin wrapper over it; `case_reporter.synthesize` is the second real consumer. | — |
 | D-15 | `build_grounded_research_tool()`'s `AgentTool(..., propagate_grounding_metadata=True)` wiring exists and is unit-tested offline, but **the propagation path has never actually run live** — M4's own checkpoint calls the search agent directly via its own `Runner`, not through a consumer's tool call, so `tool_context.state['temp:_adk_grounding_metadata']` round-tripping is verified against ADK 2.6.2 source only, not by a real call | M5's `skeptic`/`case_reporter` both run with `tools=[]` — neither consumes `grounded_research`, so M5 did not wire a live consumer either | **M9** (no earlier milestone has a natural consumer left) |
-| D-16 | Plan §9.1's **Orchestrator agent** (`plan_investigation`, T2, output `InvestigationPlan { provider_npis, depth, rationale, budget_hint }`) is not scoped into any milestone in this file | M5 did not resolve this either. M6's own Action Plan now proposes a concrete deterministic substitute (`cohort_select` + `find_shared_attribute_peers`-based candidate pairing, no LLM planning call) rather than building the plan's LLM agent — a proposal for the operator to confirm or override, not yet an implemented decision | **M6**, proposal written, needs operator confirmation before or during implementation |
+| ~~D-16~~ | ~~Plan §9.1's Orchestrator agent not scoped into any milestone~~ | **Resolved M6, deliberately, not deferred.** No LLM Orchestrator agent built. `workflow/state.cohort_select` + `ScoringService` are the deterministic substitute plan §10's own pseudocode already implies (both are explicitly non-agent steps there) — `config/screening.yaml`'s static `cohort`/`escalation_gate` blocks fully determine cohort/depth for Phase 1, so an LLM "planning" call would have no real decision left to make. Revisit only if Phase 2 needs dynamic cohort/depth planning. | — |
+| D-17 | **Synthetic scenario providers (S01–S10) carry zero `HAS_TAXONOMY` edges** — verified live M6 (`MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`). `cohort_select`'s taxonomy-prefix filter can therefore never select any of them; the live cohort (6,944 real DME providers) and the synthetic scenarios are two disjoint populations | Found via `workflow/state.build_candidate_pairs`/`cohort_select` while building M6; `ingest/synthetic.py`/`graph/loader.py` are outside M6's file list, not fixed. A cohort-based demo/eval will never see S01–S10 — query by `scenario_id` directly instead (M3/M5's smoke scripts already do) | unscheduled — fix in whichever milestone next touches `ingest/synthetic.py`, or route around it permanently if scenario-id-direct querying is judged sufficient |
+| D-18 | **`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON** — a single transient truncated response permanently poisons that cache key, replayed identically on every future call sharing it | Found live M6: `graph_investigation` on a real NPPES provider hit `AgentOutputError: response was not valid JSON: Unterminated string starting at: line 1 column 6102`, then reproduced *byte-for-byte identically* across 3 consecutive script runs — confirmed as a caching bug, not API flakiness, by clearing Redis (`redis-cli -p 6380 -n 0 flushdb`) and re-running successfully with no code change. Recommended fix: validate before caching, or skip the cache write on an `AgentOutputError`. `llm/response_cache.py`/`agents/_llm_call.py` outside M6's file list, not fixed here | high priority, unscheduled — worth fixing before M7/M9/M10's higher call volumes make it more likely to recur and masquerade as an unrelated bug |
 
 ---
 
@@ -1150,477 +1202,191 @@ python scripts/48_smoke_judgement_agents.py   (real Azure T1/T2 calls, S03 scena
 
 ---
 
-### M6 — Orchestration · `TODO`
+### M6 — Orchestration · `DONE`
 
-**Scope.** `workflow/screening.py` on the ADK `Workflow` graph runtime,
-`workflow/state.py` with the deterministic `ScoringService` (five dimensions,
-signal-family dedup, the §10 escalation gate), `scripts/40_screen.py`.
-Concurrency capped at 4. Clears debt **D-3** and **D-5**.
+**Delivered.** Every agent M1-M5 built is now wired into one deterministic
+`google.adk.workflow.Workflow` graph: `data_quality_gate` (deterministic
+verdict, not the LLM's) → `cohort_select_node` → `screen_provider` (bounded
+fan-out over the cohort, `max_parallel_workers=4`), emitting one `CasePacket`
+per screened provider. Clears **D-5**. Resolves **D-16** (no LLM Orchestrator
+agent built — see Key decisions). Finds and documents two new real gaps,
+**D-17** and **D-18**, without fixing either (out of this milestone's file
+list).
 
-Read `NOTES_API_DEVIATIONS.md` D9 first: `Workflow` must be the **root** —
-it cannot be an `LlmAgent` sub-agent — and unmatched conditional routes end a
-branch with only a warning, which needs an explicit exhaustive
-`DEFAULT_ROUTE` to satisfy hard rule 7.
+| Path | What |
+|---|---|
+| `src/specter/workflow/state.py` | CREATE — `cohort_select`, `build_candidate_pairs`, `ScoringService` (5 dimensions + escalation gate, plan §10) |
+| `src/specter/workflow/screening.py` | CREATE — `build_screening_workflow`: the `Workflow` graph, root-level |
+| `src/specter/agents/data_quality.py` | EDIT — `_observed_facts` → public `observed_facts`; new `deterministic_verdict(sources, freshness_threshold_days) -> Verdict` |
+| `src/specter/core/contracts.py` | EDIT — `CaseScore` |
+| `src/specter/core/enums.py` | EDIT — `PriorityTier` |
+| `scripts/40_screen.py` | CREATE — entry point, `--limit` for a cheap/demo cohort slice |
+| `tests/test_workflow_state.py` | CREATE — 15 tests: `cohort_select`/`build_candidate_pairs` (Neo4j-backed), `ScoringService` (pure) |
+| `tests/test_screening_workflow.py` | CREATE — 5 structural graph tests (node names, `DEFAULT_ROUTE` exhaustiveness, routing map, `max_parallel_workers`) |
+| `tests/test_data_quality.py` | CREATE — 5 offline `deterministic_verdict` tests (FAIL/WARN/PASS branches, FAIL-over-WARN priority) |
 
-#### Action Plan
+**Checkpoint — passed, live.**
 
-**Goal.** Wire every agent M1-M5 built into one deterministic graph that
-runs the full screening pipeline over a real cohort — data quality gate →
-cohort selection → bounded-concurrency fan-out (entity resolution, graph
-investigation, enforcement intel) → skeptic → deterministic scoring → case
-reporter — and emits a `CasePacket` per screened provider. Plan §10. This is
-the milestone where the seven agents built in M1-M5 stop being independently
-callable functions and become one pipeline.
+```
+pytest tests/ -q                      196 passed
+ruff check src/ tests/ scripts/       All checks passed
+mypy src/                             Success: no issues found in 52 source files
+docker compose ps                     neo4j, phoenix, redis — all healthy
 
-**Inherited context — read this before touching anything.**
+python scripts/40_screen.py --limit 2   (real Azure calls, real cohort providers)
+  screening.data_quality_gate  deterministic_verdict=warn llm_verdict=warn  (agree)
+  screening.cohort_selected    cohort_size=2 limit=2
+  both providers fanned out concurrently (screen_provider, max_parallel_workers=4)
+  cohort_size=2
+    1003001439: priority_tier=low families=[] citations_resolved=True candidate_pairs=0
+    1003008756: priority_tier=low families=[] citations_resolved=True candidate_pairs=0
+  data/cases/1003001439.json, data/cases/1003008756.json written —
+    signals=[], enforcement_matches=[], citation_report.all_resolved=True
+    (both are real, clean NPPES providers — zero fired signals is the correct
+    output, not a bug; M3/M5's own smoke scripts already prove signals fire
+    correctly against the synthetic scenarios)
+```
 
-- **Every agent function M6 needs already exists with a stable, working
-  signature — this milestone is wiring, not new agent-building.**
-  `data_quality.assess(snapshot_dir, runtime) -> AgentRunResult`,
-  `graph_investigation.investigate(driver, npi, thresholds, evidence_dir,
-  runtime) -> AgentRunResult`, `enforcement_intel.extract(driver, npi,
-  thresholds, evidence_dir, runtime) -> AgentRunResult`,
-  `entity_resolution.adjudicate(driver, npi, candidate_npi, thresholds,
-  evidence_dir, runtime) -> AgentRunResult`, `skeptic.challenge(npi,
-  graph_findings: dict, enforcement_findings: dict, runtime) ->
-  AgentRunResult`, `case_reporter.synthesize(npi, graph_findings: dict,
-  enforcement_findings: dict, counter_evidence: dict, driver, evidence_dir,
-  runtime) -> CasePacket`. `skeptic`/`case_reporter` take the *previous
-  step's* `AgentRunResult.output` dict directly — no reshaping needed between
-  fan-out and fan-in.
-- **`config/screening.yaml` already has `cohort`, `signal_families`, and
-  `escalation_gate` blocks — written ahead of this milestone, unused until
-  now.** `cohort.taxonomy_prefix: "332"` / `cohort.states: [FL, TX, CA]`;
-  `signal_families` groups the 9 signal types into 3 families
-  (`address_anomaly`, `network_anomaly`, `adverse_history`);
-  `escalation_gate.min_independent_signal_families: 3`,
-  `evidence_freshness_days: 180`. No config work needed for cohort/family
-  membership — just consume it.
-- **The 3 `signal_families` and the plan's 5 scoring `dimensions` are NOT the
-  same list, and nothing maps one to the other yet.** Plan §10:
-  `identity_integrity, network_association, adverse_history, evidence_quality,
-  corporate_complexity`. `screening.yaml`'s families are
-  `address_anomaly, network_anomaly, adverse_history` — family dedup (which
-  raw signals collapse into one vote) is a different concern from the
-  dimensional score (what axis that vote counts toward). This mapping is
-  real design work this milestone has to do, not a config lookup. Step 2
-  below has a strawman; treat it as a proposal to validate, not a spec to
-  transcribe.
-- **`ADK`'s `Workflow` graph runtime has never been imported anywhere in this
-  codebase.** `NOTES_API_DEVIATIONS.md` D9 is research-only — found during M1,
-  nothing built against it since. `grep -rn "adk.agents.Workflow" src/`
-  returns nothing today. Do not write `workflow/screening.py` from memory of
-  the plan's pseudocode graph; find the actual `Workflow`/node/edge API in
-  the installed package first (Step 0).
-- **`SourceManifest` does not persist a deterministic verdict.** D-5 says the
-  Data Quality gate shouldn't flip run to run because T1 runs at
-  `temperature=0.1`. The obvious fix — "gate on the deterministic
-  `ValidationReport` instead of the LLM's `DataQualityReport`" — doesn't
-  have a `ValidationReport` sitting anywhere to read at screening time:
-  `Connector.validate()` produces one at *ingest* time and it isn't stored in
-  `manifest.json` (`SourceManifest` has no `verdict` field). What *is*
-  available and already deterministic is `data_quality._observed_facts()` —
-  currently a private, per-source helper that recomputes
-  `row_count_matches_manifest`/`null_rate_per_column`/`snapshot_age_days`
-  fresh from the parquet on every call. Step 3 below.
-- **A live cohort run will very likely hit a real `FAIL` on day one, and
-  that's correct, not a bug to route around.** `state_medicaid_fl`/
-  `state_medicaid_tx` ingest 0 rows (D-1) and `doj` has 1 row (D-2) — both
-  still open, due M7. Decide up front (Step 6) whether M6's own checkpoint
-  demonstrates the `halt_node` path as a legitimate pass condition, or runs
-  with an explicit, logged override flag. Either is fine; silently loosening
-  the gate until the demo run passes is not.
-- **`entity_resolution.adjudicate` takes a *pair* (`npi`, `candidate_npi`),
-  not a single provider — it doesn't fan out over the cohort the same way
-  `graph_investigation`/`enforcement_intel` do.** There is already a
-  deterministic candidate generator for this:
-  `graph_tools.find_shared_attribute_peers(driver, npi, "address" |
-  "phone" | "officer")` returns peer NPIs sharing an attribute, with
-  `source_ids` already populated. Step 4 below uses it as the pairing step
-  ahead of the entity-resolution fan-out — this wasn't decided by any
-  earlier milestone, flagged in M5 as debt-adjacent, resolved here as a
-  concrete proposal.
+**Key decisions, and why.**
 
-**File manifest.**
+1. **Collapsed the plan §10 pseudocode's three separate per-agent fan-outs
+   (`entity_resolution`/`graph_investigation`/`enforcement_intel`) plus
+   `skeptic`/`score`/`case_reporter` into ONE `screen_provider` node per
+   cohort member**, run sequentially inside the node body, fanned out with a
+   single `max_parallel_workers=4`. Verified directly against ADK 2.6.2
+   source and a throwaway experiment (not guessed): `max_parallel_workers`
+   is a per-node cap, not graph-wide. Three separate 4-way fan-outs off the
+   same `cohort_select_node` output, all unconditionally triggered, would
+   run *concurrently* — up to 12 simultaneous Azure calls, violating
+   CLAUDE.md's "concurrency capped at 4 parallel providers" (a whole-system
+   cap, not per-stage). One node per provider, one Azure call in flight at a
+   time inside it, means at most 4 providers × 1 in-flight call = ≤4
+   system-wide, always. The M8 dashboard (plan §11) reads the cost ledger by
+   `agent` name, not by graph node — this collapse costs nothing in
+   per-agent-type observability, confirmed by re-reading `CostLedger`'s own
+   schema before deciding.
+2. **The data-quality gate branches on `deterministic_verdict`, computed
+   from `observed_facts` (row-count-matches-manifest, `freshness_status`),
+   never `DataQualityReport.verdict`** — D-5 cleared. The LLM call in
+   `assess()` still runs, for `blocking_reasons`/narrative a human reads,
+   but nothing in the graph branches on it.
+3. **No LLM Orchestrator agent built — D-16 resolved, not deferred again.**
+   Plan §10's own pseudocode already treats `cohort_select` and `score` as
+   explicitly non-agent steps; the only thing left for an "orchestrator" to
+   do is decide the cohort and depth, which `config/screening.yaml`'s static
+   `cohort`/`escalation_gate` blocks already fully determine for Phase 1.
+   Building an LLM planning agent whose only job is to read a config file
+   and call a deterministic function would be exactly the "no abstraction
+   with one implementation" CLAUDE.md's pillars forbid. Revisit only if a
+   real Phase 2 need for dynamic cohort/depth planning appears.
+4. **`build_candidate_pairs` is called per-provider with a single-element
+   list (`build_candidate_pairs(driver, [npi])`) inside `screen_provider`**,
+   not as a separate global fan-out + `JoinNode` reshape stage. Once the
+   fan-out collapsed to one node per provider (decision 1), there was no
+   longer a second list to zip against — reusing the existing (already
+   Neo4j-backed-tested) function with a singleton list is simpler than
+   threading a second data flow through the graph.
+5. **`ScoringService.evidence_quality` reads only `confidence_adjustment`**
+   (`min(1.0, max(0.0, 1.0 + confidence_adjustment))`, range `[0.6, 1.0]`),
+   not `citation_report` — CLAUDE.md hard rule 8's "the Skeptic influences
+   the score only through `confidence_adjustment`" read literally. This also
+   sidesteps a real ordering problem: `score` runs *before* `case_reporter`
+   in the pipeline (plan §10), but `validate_citations()` is `case_reporter`'s
+   own job (M5) — computing a `CitationReport` a second time just for scoring
+   would be duplicate live Neo4j/filesystem work for no benefit.
 
-| Path | Action | Notes |
-|---|---|---|
-| `src/specter/workflow/state.py` | CREATE | `cohort_select`, `build_candidate_pairs`, `ScoringService`, `CaseScore`/`PriorityTier` contracts (or add the two contracts to `core/contracts.py` per CLAUDE.md's "all contracts live there" — decide in Step 2, note the choice). |
-| `src/specter/workflow/screening.py` | CREATE | The ADK `Workflow` graph: gate → cohort_select → fan-out → fan-in → skeptic → score → case_reporter → END, with an explicit `DEFAULT_ROUTE` on every conditional edge. |
-| `src/specter/agents/data_quality.py` | EDIT | `_observed_facts` → `observed_facts` (public) plus a small `deterministic_verdict(sources: list[dict]) -> Verdict` pure function the workflow gate calls instead of the LLM's `DataQualityReport.verdict`. |
-| `src/specter/core/contracts.py` | EDIT | `CaseScore`, `PriorityTier` (or in `workflow/state.py`, see above) — not an `AgentOutput`, never sent to an LLM. |
-| `config/screening.yaml` | EDIT (maybe) | Only if Step 2's dimension mapping needs a new config key (e.g. per-dimension weights) — don't add one speculatively if a flat/equal weighting is defensible for Phase 1. |
-| `scripts/40_screen.py` | CREATE | Entry point: builds runtime, runs the workflow over the live cohort, writes each `CasePacket` to `data/cases/<npi>.json`, prints a per-provider summary + `PriorityTier`. |
-| `tests/test_workflow_state.py` | CREATE | Offline: `cohort_select` (Neo4j-backed like `test_graph_investigation.py`), `ScoringService` dimension math and escalation-gate logic (pure, no Neo4j needed — feed it synthetic `CasePacket`-shaped input). |
-| `tests/test_screening_workflow.py` | CREATE | Whatever `Workflow`'s own testability surface turns out to be (UNVERIFIED until Step 0) — at minimum, the `DEFAULT_ROUTE` exhaustiveness and the halt-on-FAIL path. |
+**Deviations from the Action Plan — say so plainly.**
 
-**Read before writing.**
+- **The graph does not visually match plan §10's pseudocode** (see Key
+  decision 1) — three fan-out boxes plus a `fan_in` collapsed into one
+  fan-out. Functionally equivalent, concurrency-cap-correct, and cheaper to
+  build; the trade-off is the graph itself no longer shows "which agent runs
+  when" as separate nodes (the ledger still does).
+- **Step 6's two options (demonstrate `halt_node` as the pass condition, or
+  add `--override-data-quality-gate`) were both wrong to build.** Computing
+  `deterministic_verdict` against the real current snapshot returns `warn`,
+  not `fail` — `state_medicaid_fl`/`state_medicaid_tx`'s row counts already
+  match their manifests (0 == 0, an honest record of the bot-block, not a
+  discrepancy); only `freshness_status="unknown"` triggers `WARN`. The
+  Action Plan's own assumption ("very likely hit a real FAIL on day one")
+  was wrong, caught by actually running `data_quality.build_evidence`
+  against the live snapshot before writing the gate, not by assuming.
+  `halt_node`'s own path is proven by 5 offline `deterministic_verdict`
+  tests instead (`tests/test_data_quality.py`) — same "offline test is
+  authoritative proof, live run shows real behavior" split M3 used for the
+  escalation retry.
+- **D-3 checked against the live graph, not just re-stated.** All ten
+  scenario_ids are present — S01:5, S02:5, S03:8, S04:4, S05:2, S06:2,
+  S07:1, S08:1, S09:2, S10:6 = 36 scenario rows — plus exactly 150 controls
+  (186 total, matches the known `synthetic_providers` row count). Full
+  scenario-*ID* coverage; the scenario *row count* (36) is well under the
+  plan's 50-scenario figure. Not blocking, as the original note said — now
+  backed by real Cypher output instead of an unread carry-forward.
+- **A real, unplanned data gap found via `build_candidate_pairs`/
+  `cohort_select`, not fixed here (new debt D-17):** synthetic scenario
+  providers carry **zero `HAS_TAXONOMY` edges** (verified live:
+  `MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`).
+  `cohort_select`'s taxonomy-prefix filter can therefore never select any of
+  them — the live cohort (6,944 real DME providers, taxonomy `332`, states
+  FL/TX/CA) and the S01-S10 synthetic scenarios are two disjoint
+  populations today. `ingest/synthetic.py`/`graph/loader.py` are outside
+  M6's file list; not touched.
+- **A real correctness bug found and worked around, not fixed (new debt
+  D-18):** `agents/_llm_call._invoke` writes the model's raw response to the
+  L1 Redis cache *before* `_validate_output` parses it as JSON. A single
+  transient truncated response (hit live, once, on a real NPPES provider —
+  `graph_investigation` on npi `1003001439`, `AgentOutputError: response was
+  not valid JSON: Unterminated string starting at: line 1 column 6102`) gets
+  cached and replayed identically forever — three consecutive script runs
+  reproduced the *exact same* failure at the *exact same* character offset,
+  which is what exposed it as a caching bug rather than genuine API
+  flakiness. Confirmed by clearing the cache (`redis-cli -p 6380 -n 0
+  flushdb`) and re-running successfully with no code change. `llm/
+  response_cache.py`/`agents/_llm_call.py` are outside M6's file list; not
+  fixed here — recorded as debt instead of silently patched, per
+  BUILD_MILESTONES.md §0.2.
 
-- `NOTES_API_DEVIATIONS.md` D9 (already quoted above) and D3-D8 for the
-  general "what surprised us about ADK 2.6.2" context.
-- `src/specter/agents/skeptic.py` and `case_reporter.py` in full — the exact
-  dict shapes the fan-in step needs to produce.
-- `src/specter/tools/graph_tools.py:95-113` (`find_shared_attribute_peers`)
-  and `entity_tools.py:185-226` (`propose_entity_matches`) — the pairing
-  primitives for Step 4.
-- `src/specter/agents/data_quality.py:60-78` (`_observed_facts`) — the
-  deterministic facts to build `deterministic_verdict` from.
-- `config/screening.yaml` in full (already read this session, reproduced
-  above) — `cohort`/`signal_families`/`escalation_gate` are ready to consume.
-- Whatever `python -c "import google.adk.agents as a; print(a.__file__)"`
-  points you to for the actual `Workflow` class — Step 0, do this before
-  anything else.
+**Things the next session must not get wrong.**
 
-**Steps.**
-
-0. **Find the real `Workflow` API before writing anything.** `pip show
-   google-adk` for the installed version, then locate `Workflow` in that
-   package (`_graph.py` per D9's own file references) and read its
-   constructor/node/edge/conditional-routing surface directly from source —
-   the plan's pseudocode graph is a shape to build, not an API to call
-   verbatim. If it differs from what CLAUDE.md's ritual assumes, log the
-   deviation in `NOTES_API_DEVIATIONS.md` (a new D-number) before writing
-   `workflow/screening.py`.
-
-1. **`cohort_select(driver, config) -> list[str]`.** Deterministic Cypher:
-   providers whose taxonomy code starts with `cohort.taxonomy_prefix` and
-   whose state is in `cohort.states`. No LLM. Verify the returned count
-   against D-3 while you're in there — `synthetic_providers` has 186 rows
-   against the plan's 200 (50 scenario + 150 controls); confirm all ten
-   scenario_ids (S01-S10) are actually represented in the live graph and the
-   150-control figure is what's short, not a scenario. Update D-3's status
-   with whatever you find — don't just carry the note forward unread.
-
-2. **Dimension mapping — a concrete starting proposal, not gospel.** Given
-   `signal_families` already groups the 9 detectors into 3 families:
-
-   ```
-   corporate_complexity  <- address_anomaly family (address_degree, enumeration_burst, address_churn)
-                             + community structural facts (member_count, shared-officer density)
-   network_association   <- network_anomaly family (phone_degree, officer_degree, geographic_spread)
-   adverse_history        <- adverse_history family (exclusion_proximity, community_exclusion_density,
-                             phoenix_pattern) + EnforcementFindings.matches / legal_status_per_match
-   identity_integrity     <- EntityMatchAdjudication.decision across this provider's candidate pairs
-                             (any human_review/reject conflict lowers it; auto_link/no pairs raises it)
-   evidence_quality        <- CitationReport.all_resolved + CounterEvidence.confidence_adjustment
-                             (this is where hard rule 8's bounded discount actually gets applied —
-                             deterministically, in ScoringService, never inside the Skeptic's own output)
-   ```
-
-   Validate this against the plan doc's fuller dimensional model (referenced
-   but not reproduced in §10) before committing to it — §10 only gives the
-   five names, not their formulas, so this mapping is this session's own
-   synthesis. Sanity-check family dedup with a concrete example:
-   `address_degree` and `enumeration_burst` both firing on the *same*
-   provider should count as ONE fired family for
-   `min_independent_signal_families`, not two.
-
-3. **`deterministic_verdict`.** Pull `_observed_facts` out of
-   `data_quality.py` as a public function (or leave it private and add a
-   thin public wrapper — either is fine, just don't duplicate the Polars
-   logic). New pure function, e.g.:
-
-   ```python
-   def deterministic_verdict(observed: list[dict[str, Any]]) -> Verdict:
-       if any(not o["row_count_matches_manifest"] for o in observed):
-           return Verdict.FAIL
-       if any(o["snapshot_age_days"] > <threshold> for o in observed):
-           return Verdict.WARN
-       return Verdict.PASS_
-   ```
-
-   Decide the freshness threshold from `evidence_freshness_days` (180) or a
-   separate `screening.yaml` value — either is defensible, just state which.
-   The workflow gate reads this, not `DataQualityReport.verdict` — the LLM
-   call still runs (for the human-readable narrative/`blocking_reasons`),
-   it's just no longer what the gate branches on.
-
-4. **Candidate pairing ahead of the entity-resolution fan-out.** Per cohort
-   NPI, call `find_shared_attribute_peers` for `address`/`phone`/`officer`,
-   union the peer NPIs, dedupe, drop self-matches (already excluded by the
-   Cypher's `WHERE peer.npi <> p.npi`) — that's the candidate list
-   `entity_resolution.adjudicate` runs against, one call per pair, inside the
-   same bounded-concurrency pool as the rest of the fan-out. If a cohort NPI
-   has zero peers on any attribute, it simply gets no entity-resolution call
-   — that's a correct, informative state (`identity_integrity` scores as
-   "no conflict found," not as "unresolved").
-
-5. **Fan-out concurrency: one shared `asyncio.Semaphore(4)`** across every
-   LLM call the workflow makes per run (entity resolution pairs + graph
-   investigation + enforcement intel, all sharing the same pool) — simplest
-   reading of CLAUDE.md's "concurrency capped at 4 parallel providers," and
-   avoids needing separate caps per agent type that would let the real
-   in-flight Azure request count exceed 4 anyway.
-
-6. **`halt_node` decision.** Given D-1/D-2 are still open, decide explicitly
-   whether `scripts/40_screen.py`'s own checkpoint run (a) is expected to hit
-   `data_quality_hold` and that IS the passing checkpoint (prove the halt
-   path works), or (b) takes an explicit `--override-data-quality-gate` flag
-   that logs a loud warning and proceeds anyway for demo purposes. Do not
-   quietly downgrade `deterministic_verdict`'s thresholds until a FAIL stops
-   happening — that's the silent-loosening CLAUDE.md's rule 7 exists to
-   prevent.
-
-**Checkpoint.** `pytest`/`ruff`/`mypy` clean. `python scripts/40_screen.py`
-against the live cohort: prints `cohort_size=N`, then either
-`data_quality_hold` (if (a) above) or one `CasePacket` summary line per
-provider with its `PriorityTier` (if (b)). At least one `CasePacket` on disk
-under `data/cases/` with `citation_report.all_resolved=True` and zero banned
-phrases, same assertions `scripts/48_smoke_judgement_agents.py` already
-makes, now running through the graph instead of by hand.
-
-**Traps.**
-
-- `Workflow`'s unmatched-route behavior is a silent `logging.warning`, not an
-  exception (D9). Every conditional edge — the data-quality gate at minimum
-  — needs an explicit `DEFAULT_ROUTE`; a warning buried in logs is a silent
-  failure under CLAUDE.md hard rule 7 even though nothing crashes.
-- Don't let `entity_resolution.adjudicate` calls silently multiply — a cohort
-  where many providers share one address (exactly what `address_anomaly`
-  fires on) means `find_shared_attribute_peers` can return a large peer set
-  for a single NPI. Log the candidate-pair count before running the
-  fan-out; if it's large enough to matter, that's a real finding worth a
-  `config/screening.yaml` cap, not something to guess a limit for in advance.
-- `CounterEvidence.confidence_adjustment` is the one LLM-influenced number
-  `ScoringService` may read (hard rule 8) — don't let any other Skeptic field
-  (`per_signal`, `unresolved_conflicts`) leak into a score calculation; those
-  are for the narrative only.
-
-**Definition of done.**
-
-- [ ] `Workflow` graph runs gate → cohort_select → fan-out → fan-in →
-      skeptic → score → case_reporter → END, root-level (not an `LlmAgent`
-      sub-agent), against the live cohort
-- [ ] `ScoringService` is deterministic code (no agent call), implements the
-      five dimensions with signal-family dedup and the escalation gate from
-      `config/screening.yaml`
-- [ ] Data-quality gate branches on a deterministic verdict, not the LLM's;
-      D-5 cleared
-- [ ] D-3 resolved with real numbers (not just re-stated) — actual
-      scenario/control counts checked against the live graph
-- [ ] Every conditional route has an explicit `DEFAULT_ROUTE`
-- [ ] `pytest`/`ruff`/`mypy` clean; `scripts/40_screen.py` checkpoint passes
-      per whichever halt-node decision Step 6 made
-- [ ] §3 Current State and §4 Carried Debt updated; M7 Action Plan written
-- [ ] Committed as `M6: orchestration`
-
----
-
-**Goal.** The last two of the plan's seven agents. `Skeptic` argues against
-every signal `graph_investigation`/`enforcement_intel` found; `CaseReporter`
-assembles their combined output into the final `CasePacket` — the artifact
-M9's judge subsystem grades. Plan §9.7, §9.8.
-
-**Inherited context — read this before touching anything.**
-
-- **No orchestrator exists yet.** Plan §9.1 (`Orchestrator`, T2
-  `plan_investigation`, output `InvestigationPlan`) is not scoped into *any*
-  BUILD_MILESTONES.md milestone — not M5, not M6 (`workflow/screening.py`
-  scope is the deterministic `Workflow` graph + `ScoringService`, no LLM
-  planning agent mentioned). This looks like a real gap between this file
-  and plan §9.1, not a deliberate cut — flag it to the operator rather than
-  quietly building it into M5 (out of this milestone's stated scope) or
-  quietly dropping it. Recorded as debt below.
-- **Nothing assembles a "full findings bundle" yet either** — that's also
-  implicitly the orchestrator's job in the plan. M5 calls `graph_investigation
-  .investigate()` and `enforcement_intel.extract()` directly by hand (same
-  pattern M3's own smoke script uses) to get real `GraphFindings`/
-  `EnforcementFindings` to feed `Skeptic`/`CaseReporter` — there is no
-  end-to-end pipeline to run them through until M6.
-- **CLAUDE.md hard rule 1 vs. hard rule 8 — this looks like a contradiction
-  and isn't.** Rule 1: "No LLM produces a number... a number in agent output
-  that isn't in a tool result is a bug." Rule 8: "Scoring is deterministic
-  code, never an agent. The Skeptic influences the score only through a
-  bounded `confidence_adjustment ∈ [-0.4, 0.0]`." Rule 8 is a narrow,
-  explicit carve-out of rule 1: `confidence_adjustment` is a bounded
-  judgment discount, not a fact-number derived from evidence — validate it
-  with `Field(ge=-0.4, le=0.0)` (no `default=`, same pattern
-  `EntityMatchAdjudication.match_probability` already uses successfully,
-  M3) and leave it alone. Don't "fix" this into a deterministic tool call —
-  it's supposed to be the one LLM-influenced number in the system, on a
-  short leash.
-- **D-14** (numeric-grounding check duplicated per-agent, not in a shared
-  `after_model_callback`) **comes due here.** `CaseReporter`'s own
-  no-fabricated-numbers check (plan §9.8) is exactly the second consumer of
-  the same pattern `graph_investigation.py` already implemented
-  (`_numbers_in`/`_numeric_violations` at `graph_investigation.py:95-127`).
-  Extract a generic version rather than copy-pasting a third time. See Step
-  1.
-- **The numeric-grounding pattern in `graph_investigation.py` is
-  field-specific** (`_numeric_violations` reads `output["narration"]` and
-  `output["community_context"]` by hardcoded key) — the generic extraction
-  needs a `text_fields: list[str]` parameter or similar so `CaseReporter`
-  can pass its own narrative field name(s) instead.
-
-**File manifest.**
-
-| Path | Action | Notes |
-|---|---|---|
-| `src/specter/agents/_grounding.py` | CREATE | `numbers_in(text) -> set[str]`, `numeric_violations(claimed_texts: list[str], evidence: dict) -> list[str]` — generalized out of `graph_investigation.py`. |
-| `src/specter/agents/graph_investigation.py` | EDIT | Replace its local `_numbers_in`/`_numeric_violations` with calls into `_grounding.py`. No behavior change — refactor only, existing tests must still pass unmodified. |
-| `src/specter/agents/skeptic.py` | CREATE | T2 `challenge_hypothesis`. No tools (reasoning-only over the findings bundle it's handed) — `tools=[]` to `build_agent`, consistent with the subset-of-`all_tools` pattern M3 established. |
-| `src/specter/agents/case_reporter.py` | CREATE | T2 `synthesize_case`. Assembles `CasePacket` (see Step 3 for the split between the LLM's narrow `output_schema` and the deterministic assembly code around it). |
-| `src/specter/core/contracts.py` | EDIT | `Rebuttal`, `CounterEvidence` (plan §9.7); `CaseNarrative` (LLM output_schema, narrow); `CasePacket` (the assembled artifact — not an agent `output_schema`, so none of the strict-mode no-defaults/no-dict constraints apply to it). |
-| `src/specter/core/banned_vocabulary.py` | CREATE | `BANNED_PHRASES = ("fraudulent", "criminal", "guilty", "proven", "confirmed fraud")`; `find_banned_phrases(text: str) -> list[str]`, case-insensitive regex, word-boundary matched. CLAUDE.md hard rule 9: "enforced by regex post-check, not just prompt instruction." |
-| `prompts/agents/skeptic.md` | CREATE | Role brief — the benign-explanation checklist from plan §9.7 verbatim (multi-tenant building, billing artifact, peer-comparison mismatch, common-name collision, stale source, synthetic contamination, group-practice structure). |
-| `prompts/agents/case_reporter.md` | CREATE | Role brief — controlled vocabulary, `"exhibits N independently observed indicators"` phrasing, explicit reminder of the banned list (belt-and-suspenders with the regex check). |
-| `scripts/48_smoke_judgement_agents.py` | CREATE | Live checkpoint: runs `graph_investigation` + `enforcement_intel` on a synthetic scenario NPI, feeds the result into `skeptic`, then `case_reporter`; prints the assembled `CasePacket`. |
-| `tests/test_grounding.py` | CREATE | Offline: `numbers_in`/`numeric_violations` unit tests (move/extend whatever's implicitly covered by `test_graph_investigation.py` today). |
-| `tests/test_banned_vocabulary.py` | CREATE | Offline: each banned phrase is caught, case-insensitively; a clean narrative returns `[]`; a substring false-positive check (e.g. "guiltily" shouldn't false-match "guilty" — decide word-boundary behavior explicitly and test it). |
-| `tests/test_skeptic.py`, `tests/test_case_reporter.py` | CREATE | Offline evidence-builder tests, same style as `test_entity_resolution.py`/`test_graph_investigation.py` (M3). |
-
-**Read before writing.**
-
-- `phase_1_build_plan.md` §9.7-9.8 (lines ~738-746) — exact scope text,
-  already quoted above.
-- `src/specter/agents/graph_investigation.py` lines 90-180 — the numeric-
-  grounding pattern to generalize, and the `build_evidence`/`investigate`
-  shape to mirror for `skeptic.py`/`case_reporter.py`.
-- `src/specter/core/contracts.py`'s `RiskSignal`, `GraphFindings`,
-  `EnforcementFindings`, `CaseLegalStatus`, `EvidenceArtifact` — everything
-  `CasePacket` needs to reference or embed.
-- `src/specter/tools/evidence_tools.py`'s `validate_citations` — `CaseReporter`
-  must call this before returning; it already takes a flat `source_ids: list[str]`
-  (M2 built it exactly for this, unused until now).
-- CLAUDE.md hard rules 1, 3, 4, 5, 6, 8, 9 — this milestone touches more of
-  them at once than any other so far.
-
-**Steps.**
-
-1. **Extract `agents/_grounding.py` first**, refactor `graph_investigation.py`
-   to use it, run `pytest tests/test_graph_investigation.py -q` — must still
-   pass unmodified before writing anything new. This clears D-14 as a
-   byproduct rather than a separate pass.
-
-2. **`Skeptic`.** Draft schema:
-
-   ```python
-   class Rebuttal(SpecterModel):
-       signal_type: str                    # echoes RiskSignal.signal_type — never invented
-       benign_explanation: str | None
-       no_plausible_benign_explanation: bool
-       reasoning: str
-
-   class CounterEvidence(AgentOutput):
-       per_signal: list[Rebuttal]
-       unresolved_conflicts: list[str]
-       confidence_adjustment: float = Field(ge=-0.4, le=0.0)
-   ```
-
-   Evidence bundle: the `GraphFindings`/`EnforcementFindings` this milestone's
-   smoke script already ran by hand, serialized the same way
-   `graph_investigation.build_evidence` does. `challenge()` should validate
-   that `per_signal` covers every `signal_type` actually present in the
-   input `GraphFindings.signals` — an LLM silently dropping a signal from
-   its rebuttal list is a real failure mode worth catching, same spirit as
-   the numeric-grounding check (UNVERIFIED whether this needs a retry loop
-   like `graph_investigation`'s or a hard raise; decide once you see real
-   output).
-
-3. **`CaseReporter` — the two-part split.** Don't make the LLM's
-   `output_schema` *be* `CasePacket`. Rule 1 means fields like
-   `signals`/`citations`/`legal_status_per_match` must be echoed from
-   already-computed data, not regenerated by the model, so let the LLM
-   produce only what's genuinely generative — the narrative — and assemble
-   the rest in Python:
-
-   ```python
-   class CaseNarrative(AgentOutput):
-       narrative: str                      # the controlled-vocabulary prose
-       exhibited_indicators_summary: str   # e.g. "exhibits 3 independently observed indicators" — count must be echoed from len(signals), not computed by the model
-
-   class CasePacket(SpecterModel):         # NOT an AgentOutput — assembled, not model-produced
-       provider_npi: str
-       narrative: str
-       signals: list[RiskSignal]
-       enforcement_matches: list[str]
-       legal_status_per_match: list[CaseLegalStatus]
-       counter_evidence: CounterEvidence
-       citation_report: CitationReport
-       created_at: datetime
-   ```
-
-   `synthesize_case()`: run the `CaseNarrative` agent call, run
-   `find_banned_phrases()` on `narrative` (raise if non-empty — CLAUDE.md
-   hard rule 9 says regex-enforced, not advisory), run
-   `numeric_violations()` against the same evidence bundle passed in, run
-   `validate_citations()` against every `source_ids` collected off
-   `signals`/enforcement matches/counter-evidence, then construct
-   `CasePacket` directly in Python from the already-validated pieces. This
-   draft schema is a starting point, not gospel — validate every field
-   against strict-mode/ADK reality the way M3/M4 both had to (D5/D13 were
-   both discovered live, not predicted); expect at least one field shape to
-   change once you actually call it.
-
-4. **Banned vocabulary.** Word-boundary, case-insensitive:
-   `re.compile(r"\b(" + "|".join(re.escape(p) for p in BANNED_PHRASES) + r")\b", re.IGNORECASE)`.
-   Decide and test the "guiltily"-contains-"guilty" edge case explicitly —
-   `\b` after "guilty" won't match inside "guiltily" (no word boundary
-   between "y" and "i"), which is probably the right call, but prove it
-   with a test rather than assuming.
-
-**Checkpoint.** `pytest tests/ -q` all green (offline suite grows by ~4
-files); `ruff`/`mypy` clean; `python scripts/48_smoke_judgement_agents.py`
-against a real synthetic scenario NPI (e.g. S03, already used by M3's own
-smoke script) prints a `CounterEvidence` with at least one `Rebuttal` per
-input signal, then a `CasePacket` whose `citation_report.all_resolved is
-True` and whose narrative contains none of the banned phrases (assert this
-in the script, don't just eyeball it).
-
-**Traps.**
-
-- Giving `CaseReporter`'s `output_schema` the full `CasePacket` shape
-  directly — tempting, and wrong twice over: it would let the model
-  restate signal counts/citations itself (rule 1), and `CasePacket` isn't
-  an `AgentOutput` in the first place (nothing forces strict-mode shape
-  constraints on it, which is exactly why assembling it in plain Python is
-  easier, not harder).
-- Forgetting `CounterEvidence.confidence_adjustment`'s bound is enforced by
-  `Field(ge=-0.4, le=0.0)` at the schema level — that's necessary but not
-  sufficient; nothing stops a future `workflow/state.ScoringService` (M6)
-  from misusing a correctly-bounded value. Note in `CasePacket`'s docstring
-  that this field is *the only* LLM-influenced number the scorer may read.
-- `find_banned_phrases` running on the raw LLM output before the citation/
-  numeric checks — order matters for a useful error message (a banned-word
-  violation is a content problem, worth surfacing before spending a retry
-  cycle on a citation problem), but don't let one check's exception path
-  swallow the others silently. Decide and document the check order in
-  `synthesize_case`'s docstring.
-
-**Definition of done.**
-
-- [ ] `Skeptic` produces a `Rebuttal` per input signal, `confidence_adjustment`
-      bounded and validated by the schema
-- [ ] `CaseReporter` assembles a `CasePacket` with `validate_citations()`
-      passing and zero banned phrases, enforced by a regex check that raises
-      (not just an instruction)
-- [ ] The numeric-grounding check is shared code (`agents/_grounding.py`),
-      used by both `graph_investigation.py` and `case_reporter.py` — D-14
-      cleared
-- [ ] `pytest`/`ruff`/`mypy` clean; existing `test_graph_investigation.py`
-      still passes unmodified after the refactor
-- [ ] §3 Current State and §4 Carried Debt updated (including a decision or
-      an explicit escalation on the missing-Orchestrator-agent gap); M6
-      Action Plan written
-- [ ] Committed as `M5: judgement agents`
-
----
-
-### M6 — Orchestration · `TODO`
-
-**Scope.** `workflow/screening.py` on the ADK `Workflow` graph runtime,
-`workflow/state.py` with the deterministic `ScoringService` (five dimensions,
-signal-family dedup, the §10 escalation gate), `scripts/40_screen.py`.
-Concurrency capped at 4. Clears debt **D-3** and **D-5**.
-
-Read `NOTES_API_DEVIATIONS.md` D9 first: `Workflow` must be the **root** —
-it cannot be an `LlmAgent` sub-agent — and unmatched conditional routes end a
-branch with only a warning, which needs an explicit exhaustive
-`DEFAULT_ROUTE` to satisfy hard rule 7.
-
-#### Action Plan
-
-*(not yet written)*
+- **`google.adk.workflow.Workflow(...)` requires an explicit `name=` kwarg**
+  (Pydantic-required) in addition to `edges=` — not in the plan's own
+  pseudocode, first thing that broke a throwaway experiment before any real
+  code was written this session.
+- **`JoinNode` waits for *every* node listed as its predecessor in the edge
+  list, even one that's structurally unreachable on the branch actually
+  taken** — confirmed by direct experiment: a `JoinNode` with predecessors
+  split across a conditional route's two branches silently never fires (no
+  error, no timeout) when only one branch runs; the run just ends without
+  that `JoinNode`'s output. Never declare a `JoinNode`'s predecessors across
+  mutually exclusive conditional branches. (Not hit in the shipped graph —
+  `join` isn't used at all after the fan-out collapse — but would have been
+  a silent trap if the original 3-fan-out design had shipped.)
+- **`Runner(node=workflow, ...)` — not `Runner(agent=workflow, ...)`.**
+  `Workflow` is a `BaseNode`, not a `BaseAgent`; `Runner.__init__` has a
+  separate `node=` parameter for exactly this case. Confirmed by reading
+  `Runner._resolve_app` directly (`runners.py:326-331`), not by trial and
+  error — `agent=` type-checks under `Optional[BaseAgent]`'s duck typing in
+  a way that looks fine but silently misroutes.
+- **The fan-out shape is a deliberate deviation from plan §10's pseudocode**
+  (Key decision 1 / Deviations above). Don't "fix" it back to three separate
+  fan-out nodes without re-deriving the concurrency math (3×4=12 > the
+  CLAUDE.md-mandated system-wide cap of 4) — ADK 2.6.2 has no native
+  cross-node shared concurrency pool.
+- **`data/cases/<npi>.json` is now a real, growing output directory** —
+  `scripts/40_screen.py` creates it if missing and overwrites per-npi on
+  every run. Existing files there are this milestone's own generated
+  artifacts, safe to regenerate.
+- **The Redis L1 cache can hold a poisoned entry (D-18).** If a live run
+  fails with a suspiciously *exact*, byte-for-byte repeatable
+  `AgentOutputError: ... response was not valid JSON` across otherwise
+  independent runs, that's the signature — `redis-cli -p 6380 -n 0
+  flushdb` clears it (safe: it's a re-derivable response cache, nothing
+  persisted is lost).
+- **`cohort_select(driver, "332", ["FL","TX","CA"])` returns real NPPES
+  providers only — never a synthetic scenario NPI (D-17).** A cohort-based
+  demo or eval that expects S01-S10 to show up will get zero matches; query
+  by `scenario_id` directly instead, the way M3/M5's own smoke scripts
+  already do.
 
 ---
 
@@ -1634,7 +1400,173 @@ refilling the bot-blocked FL/TX sources and the DOJ corpus.
 
 #### Action Plan
 
-*(not yet written)*
+**Goal.** Refill **D-1** (`state_medicaid_fl`/`state_medicaid_tx` ingest 0
+rows — both 403 to a plain HTTP client) and **D-2** (`doj` is a 1-row corpus
+— the RSS feed only covers a shallow recent window) via `tools/mcp_tools.py`:
+a Playwright MCP wrapper (real-browser fetch, storing rendered HTML *and* a
+screenshot as `EvidenceArtifact`s) and a Neo4j Cypher MCP wrapper carrying
+all four of CLAUDE.md's mandatory guardrails. Plan §8 `tools/mcp_tools.py`,
+CLAUDE.md's "Neo4j MCP guardrails" section, Amendment 1.
+
+**Inherited context — read this before touching anything.**
+
+- **No `NOTES_API_DEVIATIONS.md` entry exists yet for ADK's MCP tooling** —
+  confirmed this session (`grep -n "McpToolset\|mcp" NOTES_API_DEVIATIONS.md`
+  → nothing). M7 needs its own Step 0, exactly like M6 needed one for
+  `Workflow`: read the real installed package before writing anything
+  (CLAUDE.md's "do not write ADK code from memory" ritual). Confirmed present
+  in this install: `google/adk/tools/mcp_tool/` (a directory, not read yet)
+  and `google/adk/tools/_remote_mcp_server.py`.
+- **`Connector.fetch()` (`ingest/base.py`) is synchronous** —
+  `def fetch(self, cfg: SourceConfig) -> Path`, called directly by
+  `Connector.run()`, no `asyncio` anywhere in the ingest path today. ADK's
+  MCP tools are async, built to be called by an `LlmAgent` inside ADK's own
+  event loop. This is a real, undecided design fork, not a detail to guess
+  past:
+  - **(a)** Use the `playwright` Python package directly (no MCP, no LLM,
+    no agent) inside `StateMedicaidConnector.fetch()`/a DOJ-archive fetch —
+    reserve `McpToolset` + the Playwright MCP server for a genuinely
+    agent-facing capability later (none exists yet in this codebase).
+  - **(b)** Make the relevant ingest path async and drive an agent-mediated
+    Playwright MCP fetch specifically for FL/TX/DOJ.
+  Plan §8's own phrasing ("Playwright MCP — fetch and render DOJ releases...
+  provider websites") reads like (b), but nothing in CLAUDE.md's guardrails
+  section (which is unambiguously about the *sibling* Neo4j MCP server being
+  agent-facing) actually requires the *backfill ingest* itself to go through
+  an agent. Decide by trying both against one real blocked URL, not by
+  re-reading the docs harder.
+- **`ingest/state_medicaid.py`'s FL/TX branches already degrade gracefully
+  today**: `fetch()` attempts a plain request, catches the 403, and writes
+  an empty marker rather than crashing (`validate()` reports `WARN`, not
+  `FAIL`). M7 replaces *that* fetch path for FL/TX only — CA's plain-CSV
+  path already works and is untouched.
+- **`config/sources.yaml` already has the diagnosis, not just the URLs.**
+  `state_medicaid_fl`/`state_medicaid_tx` are marked
+  `access: blocked_needs_playwright` with the confirmed-403 landing-page
+  URLs; `doj` notes the RSS feed's shallow window and that
+  `justice.gov/news`'s own search UI is Akamai-protected. M7 is the unblock,
+  not the diagnosis.
+- **D-18 (found in M6) is a live landmine for M7's own checkpoint.**
+  `agents/_llm_call._invoke` caches a model response to Redis *before*
+  validating it's well-formed JSON — a single transient truncated response
+  permanently poisons that cache key, replayed identically on every future
+  call sharing it. M7's live runs (real Playwright fetches feeding real LLM
+  extraction/adjudication calls) are exactly the higher-volume case where
+  this is likely to recur. Signature: an `AgentOutputError` that repeats
+  *byte-for-byte identically* across otherwise-independent runs.
+  `redis-cli -p 6380 -n 0 flushdb` clears it (safe). Not M7's file to fix.
+- **CLAUDE.md's four Neo4j MCP guardrails are explicit and all mandatory**:
+  connect as `NEO4J_READONLY_USER` (create this role in Neo4j itself — an
+  RBAC concern, not an app-level check), 10s query timeout, a
+  pre-execution regex rejecting `CREATE|MERGE|DELETE|SET|REMOVE|DROP|CALL apoc`,
+  and force-appending `LIMIT 100` when absent. "All four are mandatory" is
+  CLAUDE.md's own wording — not a subset to prioritize.
+
+**File manifest.**
+
+| Path | Action | Notes |
+|---|---|---|
+| `src/specter/tools/mcp_tools.py` | CREATE | Playwright MCP wrapper (stores HTML + screenshot as two `EvidenceArtifact`s per fetch) and Neo4j Cypher MCP wrapper with all four guardrails as a single choke point. |
+| `src/specter/ingest/state_medicaid.py` | EDIT | FL/TX `fetch()` — replace the 403-then-empty-marker path (mechanism per Step 1's decision). CA untouched. |
+| `src/specter/ingest/doj.py` | EDIT | Deeper archive fetch beyond the RSS feed's 1-2 day window. |
+| Neo4j bootstrap (new script or `docker-compose.yml` init) | CREATE/EDIT | `NEO4J_READONLY_USER` role creation — verify real Neo4j 5.26 RBAC Cypher syntax, don't assume 4.x-era syntax. |
+| `config/sources.yaml` | EDIT | FL/TX/doj — real resolved URLs, `access` field updated once unblocked. |
+| `tests/test_mcp_tools.py` | CREATE | All four guardrails, independently testable offline (regex rejection, `LIMIT` injection, timeout config) — fake/mock the MCP client, no live server needed for these. |
+| `NOTES_API_DEVIATIONS.md` | EDIT | Real `McpToolset` API notes (new D-number) — the Step 0 findings. |
+
+**Read before writing.**
+
+- `google/adk/tools/mcp_tool/` and `google/adk/tools/_remote_mcp_server.py` — Step 0, nothing here has been read yet.
+- `src/specter/ingest/state_medicaid.py` in full (241 lines) — the FL/TX path this milestone replaces.
+- `src/specter/ingest/doj.py` in full (162 lines) and `config/sources.yaml`'s `doj` entry.
+- `src/specter/ingest/base.py` — `Connector`'s synchronous `fetch()` contract, the crux of the sync/async fork above.
+- `src/specter/tools/evidence_tools.py`'s `store_artifact()` — reuse it for HTML+screenshot storage, don't reinvent it.
+- CLAUDE.md's "Neo4j MCP guardrails" section, verbatim (already quoted above).
+- `agents/_llm_call.py`'s `finally: await runner.close()` and its comment "`close()` tears down toolsets and MCP sessions (M7 depends on this)" — M1/M3 already anticipated MCP lifecycle needs here; re-read with that in mind before assuming toolset cleanup needs new code.
+
+**Steps.**
+
+0. Real API research first, same discipline M6 used for `Workflow`. This
+   session confirmed `pip`/`python -m pip` are **not available** in this
+   venv (`command not found`, `No module named pip`) — use
+   `python -c "import google.adk; print(google.adk.__file__)"` (and
+   `__version__` if needed) instead of `pip show google-adk`. Read
+   `McpToolset`'s constructor and connection-parameter shape (stdio vs. SSE
+   vs. HTTP — confirm what the installed Playwright MCP integration actually
+   expects, e.g. a subprocess command like `npx @playwright/mcp`), and
+   whether it's a plain list element in `LlmAgent.tools=[]` or needs
+   `async with`-style lifecycle management.
+1. Decide the sync-ingest-vs-agent-mediated-fetch fork (Inherited Context)
+   empirically against one real blocked URL (the FL AHCA landing page is
+   already confirmed-403 and documented) before committing to a design.
+2. Neo4j Cypher MCP wrapper: create the `NEO4J_READONLY_USER` role in Neo4j
+   itself first (verify real 5.26 RBAC syntax), then wrap every generated
+   query execution through one choke point applying the timeout + regex
+   guardrail + `LIMIT`-append in order, logging every generated Cypher
+   string to the trace span as `specter.cypher` (plan §11 already names this
+   attribute — log it now so M8 doesn't need a second pass).
+3. Playwright MCP wrapper: fetch FL AHCA + TX HHS-OIG + a deeper DOJ archive
+   window, storing rendered HTML and a screenshot as two separate
+   `EvidenceArtifact`s per fetch (`extraction_method="playwright_mcp"` or
+   similar — required field, no default, same discipline M4 established).
+4. Wire the Neo4j MCP into `graph_investigation.py`'s tool list *only if*
+   Step 0 confirms it's additive without breaking the cache-boundary
+   invariant — adding a tool changes B0; regenerate
+   `prompts/blocks/b0_tool_schemas.md` via
+   `python scripts/05_generate_prompt_blocks.py` (M1's own Action Plan
+   trap, still live).
+5. Re-run FL/TX/DOJ ingest for real, inspect the actual FL/TX file layout
+   for the first time (`config/sources.yaml`'s own note: "Real
+   column-mapping logic... can only be written once M7 unblocks fetching"),
+   write the real schema mapping. Expect a mix of XLSX/CSV/PDF per CLAUDE.md
+   Amendment 1's own warning; PDF needs `pdfplumber`, and
+   `known_limitations: ["pdf_table_extraction", "no_npi_field"]` plus a WARN
+   (not a silent pass) if extraction confidence is low.
+
+**Checkpoint.** `pytest`/`ruff`/`mypy` clean. Live ingest re-run:
+`state_medicaid_fl`/`state_medicaid_tx` each ingest > 0 rows with a real
+manifest (not the empty-marker `WARN` path); `doj` ingests meaningfully more
+than 1 row (state the real number, don't just claim "fixed"). Offline: a
+Neo4j MCP call carrying a `DELETE` verb is rejected before execution (mock
+the client, no live server needed); a query without `LIMIT` gets `LIMIT 100`
+force-appended.
+
+**Traps.**
+
+- `pip`/`python -m pip` are not on PATH in this venv (confirmed this
+  session) — use `python -c "import google.adk; ..."` instead.
+- Every URL a connector hardcodes must also land in `config/sources.yaml`
+  (Amendment 1, already the enforced convention here) — don't fetch a real
+  FL/TX URL and leave the registry entry saying `blocked_needs_playwright`.
+- The read-only role must exist in Neo4j itself (RBAC), not just be
+  app-level discipline — a wrapper that connects with the app's
+  full-privilege user and merely refuses to *send* write verbs is not the
+  guarantee CLAUDE.md asks for; a regex bypass or an APOC call would still
+  have real write access underneath.
+- Don't let Neo4j-MCP-derived citations break `CaseReporter`'s citation
+  check — if `graph_investigation` starts citing `source_ids` from a
+  free-form Cypher query, `evidence_tools._resolves_to_graph_node` needs to
+  still recognize them as valid `graph:` identifiers, or every MCP-derived
+  citation fails `validate_citations`.
+- D-18's poisoned-cache signature (repeatable, byte-identical
+  `AgentOutputError` across independent runs) can eat real debugging time if
+  mistaken for a Playwright/parsing bug — check Redis before assuming the
+  new ingest/extraction code is wrong.
+
+**Definition of done.**
+
+- [ ] `tools/mcp_tools.py` wraps both MCP servers; all four CLAUDE.md
+      guardrails on the Neo4j MCP path, each covered by an offline test
+- [ ] `state_medicaid_fl`/`state_medicaid_tx` ingest real rows (not the
+      403 empty-marker path); real column mapping from the actual file layout
+- [ ] `doj` corpus is meaningfully larger than 1 row — real number reported
+- [ ] `config/sources.yaml` updated with real resolved URLs and `access` status
+- [ ] Every generated Cypher string logged as `specter.cypher`
+- [ ] `pytest`/`ruff`/`mypy` clean
+- [ ] §3 Current State and §4 Carried Debt updated (D-1/D-2 resolved or
+      narrowed with real numbers; D-18 noted if touched in passing); M8
+      Action Plan written
+- [ ] Committed as `M7: mcp integration`
 
 ---
 

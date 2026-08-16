@@ -33,6 +33,7 @@ Currently defined:
 - Rebuttal, CounterEvidence, CaseNarrative, CasePacket (M5 of
   BUILD_MILESTONES.md, plan §9.7-9.8 `agents/skeptic.py`,
   `agents/case_reporter.py`)
+- CaseScore (M6 of BUILD_MILESTONES.md, plan §10 `workflow/state.ScoringService`)
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ from specter.core.enums import (
     FreshnessStatus,
     LegalStatus,
     MatchDecision,
+    PriorityTier,
     Verdict,
 )
 
@@ -559,6 +561,28 @@ class CasePacket(SpecterModel):
     counter_evidence: CounterEvidence
     citation_report: CitationReport
     created_at: datetime
+
+
+class CaseScore(SpecterModel):
+    """Output of `workflow/state.ScoringService` (plan §10, M6) — deterministic
+    code, never an agent (CLAUDE.md hard rule 8). `evidence_quality` is the
+    only dimension `confidence_adjustment` (the Skeptic's bounded
+    `[-0.4, 0.0]` discount) touches; every other dimension traces to
+    `RiskSignal`/`EntityMatchAdjudication`/`EnforcementFindings` fields alone.
+    `escalation_gate_reasons` is never empty: it names either the four
+    conditions met (`HIGH_PRIORITY`) or which ones weren't.
+    """
+
+    provider_npi: str
+    identity_integrity: float = Field(ge=0.0, le=1.0)
+    network_association: float = Field(ge=0.0, le=1.0)
+    adverse_history: float = Field(ge=0.0, le=1.0)
+    evidence_quality: float = Field(ge=0.0, le=1.0)
+    corporate_complexity: float = Field(ge=0.0, le=1.0)
+    fired_signal_families: list[str]
+    independent_signal_family_count: int = Field(ge=0)
+    priority_tier: PriorityTier
+    escalation_gate_reasons: list[str]
 
 
 class AgentRunResult(SpecterModel):

@@ -78,3 +78,14 @@ class CacheLayer(StrEnum):
     NONE = "none"
     L1 = "L1"
     L3 = "L3"
+
+
+class PriorityTier(StrEnum):
+    """Output of `workflow/state.ScoringService` (plan §10, M6). `HIGH_PRIORITY`
+    means the case met all four escalation-gate conditions verbatim; never set
+    by an agent, never collapsed with the others.
+    """
+
+    HIGH_PRIORITY = "high_priority"
+    STANDARD = "standard"
+    LOW = "low"
