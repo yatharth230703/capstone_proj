@@ -30,6 +30,7 @@ dependencies = [
     "opentelemetry-exporter-otlp==1.42.1",
     "fastexcel==0.16.0",
     "rich>=15.0.0",
+    "scikit-learn==1.9.0",
 ]
 
 [dependency-groups]
@@ -59,6 +60,11 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 # usaddress and igraph ship no py.typed marker / stubs
 module = ["usaddress", "igraph"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# sklearn ships no complete stubs; joblib is a scikit-learn transitive dep
+module = ["sklearn.*", "joblib"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

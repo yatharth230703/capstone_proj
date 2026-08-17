@@ -16,6 +16,13 @@ data/raw/
 data/ledger.sqlite
 data/evidence/
 data/cases/
+# M12: the persisted IsolationForest + sidecar. Gitignored, not committed,
+# for the same reason data/evidence/ is: its sidecar cites an artifact_id in
+# data/evidence/, so committing one without the other leaves an unresolvable
+# citation on a fresh checkout. Regenerate both together with
+# `python scripts/70_train_anomaly_model.py` (~19 min on the full cohort,
+# measured live 2026-08-18).
+data/models/
 .secrets/
 
 # Playwright MCP's own run artifacts (screenshots, console logs) — written

@@ -39,6 +39,8 @@ Currently defined:
   §12 `judge/`)
 - AddressClassification (M11 of BUILD_MILESTONES.md, CLAUDE.md Amendment 4(c)
   `tools/maps_tools.py`)
+- MlConfig, ProviderFeatures, AnomalyScore (M12 of BUILD_MILESTONES.md,
+  CLAUDE.md Amendment 4(b) `tools/ml_tools.py`)
 """
 
 from __future__ import annotations
@@ -318,6 +320,61 @@ class AddressClassification(SpecterModel):
     medical_establishment_count: int = Field(ge=0)
     classification_reason: str
     known_limitations: list[str]
+
+
+class MlConfig(SpecterModel):
+    """`config/screening.yaml`'s `ml:` block (M12, CLAUDE.md Amendment 4(b))
+    — feature order, ordinal encoding, and every `IsolationForest`
+    hyperparameter. Nothing here lives in `.py`: a changed value here changes
+    what the next `scripts/70_train_anomaly_model.py` run produces, never
+    what `tools/ml_tools.py` hardcodes.
+    """
+
+    feature_order: list[str]
+    # Least to most implausible for a practice address — "unclassified" sits
+    # in the middle, genuinely unknown, not "known normal".
+    location_type_order: list[str]
+    # Independent of `thresholds.exclusion_proximity_max_hops` (which gates
+    # the *signal*): this caps the Cypher search for the *feature*, which
+    # needs the real hop count regardless of whether it clears a threshold.
+    exclusion_proximity_feature_max_hops: int = Field(gt=0)
+    random_state: int
+    n_estimators: int = Field(gt=0)
+    contamination: float | Literal["auto"]
+    model_version: str
+
+
+class ProviderFeatures(SpecterModel):
+    """Output of `tools/ml_tools.extract_features` — one row of the anomaly
+    model's input matrix (M12). `feature_order` travels with `values` so a
+    consumer can always verify the two line up; `MlConfig.feature_order`
+    pinned in `config/screening.yaml` is the single source of truth both
+    training and scoring read it from.
+    """
+
+    provider_npi: str
+    values: list[float]
+    feature_order: list[str]
+
+
+class AnomalyScore(SpecterModel):
+    """Output of `tools/ml_tools.score_provider` (M12, CLAUDE.md Amendment
+    4(b)) — a trained `IsolationForest`'s structural-anomaly score, never a
+    fraud probability (plan §16; Amendment 4(b)(5) forbids describing it as
+    one anywhere, including here). `source_ids` resolves through
+    `evidence_tools.validate_citations` like every other number in the
+    system: the provider's own graph node plus the persisted training-summary
+    `EvidenceArtifact` this `model_version` was scored against.
+    """
+
+    provider_npi: str
+    anomaly_score: float
+    model_version: str
+    source_ids: list[str]
+    training_set_description: str = Field(min_length=1)
+    known_limitations: list[str]
+    data_origin: DataOrigin
+    scored_at: datetime
 
 
 class ProviderProfile(SpecterModel):

@@ -201,7 +201,7 @@ rule.
 | # | Milestone | Deliverable | Status |
 |---|---|---|---|
 | **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `DONE` |
-| **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `TODO` |
+| **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `DONE` |
 | **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `TODO` |
 | **M14** | Dashboard frontend | The judge-facing UI: cohort overview, per-case drill-down, JudgeReport view | `TODO` |
 
@@ -211,16 +211,28 @@ rule.
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-18, end of M11 — Phase 1 complete, Phase 2 slice
+**Last updated: 2026-08-18, end of M12 — Phase 1 complete, Phase 2 slice
 underway.** M1-M10 `DONE` (Phase 1). **M11 `DONE`** — the Physical Existence
 signal is live, classified against the real Google Maps Platform, and firing
-in real case packets. M12-M14 are `TODO`; M12's Action Plan is written.
+in real case packets. **M12 `DONE`** — an `IsolationForest` anomaly scorer is
+trained on the full real cohort and callable via `ml_tools.score_provider`.
+M13-M14 are `TODO`; M13's Action Plan is written.
 
 **M11 in one line:** 244 screened-cohort addresses classified live — 173
 `commercial_medical`, 46 `commercial`, 24 `residential`, 2 `mailbox_store` —
 and `physical_existence` fires for all 30 providers at an implausible-type
 address, with every citation resolving. Full detail, including two rejected
 API choices, in M11's Result block in §5.
+
+**M12 in one line:** trained unsupervised on the full 6,970-provider real
+cohort; the held-out synthetic sanity check comes back **weak** —
+`auc=0.556` (barely above the 0.5 random baseline), `precision@36=0.333`
+(beats the 0.194 random baseline, but not by much). The eleven structural
+features are heavily zero-inflated for this DME cohort and each synthetic
+scenario was designed to trip one detector, not to look anomalous across the
+whole vector — a real, honestly-reported finding, not a training bug. Kept
+**out of `ScoringService`/the escalation gate** as a result; ships as a
+dashboard-only panel for M13/M14. Full detail in M12's Result block in §5.
 
 **S01 is closed (D-26, operator-approved).** Its five providers now sit at
 real Miami residential streets, fire `physical_existence` and nothing else,
@@ -361,13 +373,21 @@ these are new measurements, not restatements:**
 ### Verified green
 
 ```
-pytest tests/ -q          290 passed, 0 failed   (2026-08-18, end of M11 — 270 Phase 1
-                           baseline + 17 maps_tools + S01/data_origin regression tests)
+pytest tests/ -q          295 passed, 0 failed   (2026-08-18, end of M12 — 290 M11
+                           baseline + 5 new ml_tools tests)
 ruff check src/ tests/ scripts/     clean       (2026-08-18)
-mypy src/                           clean, 64 source files   (2026-08-18)
+mypy src/                           clean, 65 source files   (2026-08-18)
 ```
 
-**All four credentials verified live by this session on 2026-08-18** — not
+**Azure key re-proven live at the start of this session (M12), per the
+operator's explicit instruction not to trust any prior note's timestamp** —
+`POST {azure_api_base}/chat/completions` (the project's own
+`_confirm_azure_key_alive` shape) returned `200` with a real completion.
+M12 itself made **zero** Azure/LLM calls — training and scoring are pure
+Neo4j + scikit-learn — so this check was precautionary, not load-bearing for
+the milestone.
+
+**All four credentials verified live in the M11 session on 2026-08-18** — not
 taken on anyone's word, including the operator's:
 
 | Credential | Check run | Result |
@@ -412,6 +432,7 @@ entries; the legacy Nearby Search endpoint M11 uses is enabled and works.
 | ~~D-26~~ | ~~S01 still undetected after M11~~ **CLEARED 2026-08-18, same session, operator-approved.** S01's five providers moved onto real Miami residential streets (picked empirically — 8 candidates probed, the 5 returning `residential` with 0 establishments within 50m kept). All five now fire `physical_existence` and nothing else; `SCENARIO_EXPECTED_SIGNALS["S01"]` updated; **`JudgeReport.md` headline moved 8/8 → 9/9**. `data_origin` stays `synthetic` on the nodes, `public` on the Maps artifact. Only the `synthetic_providers` snapshot was regenerated (186 rows, unchanged count); every other frozen source was left untouched. **Fixing this surfaced a real pre-existing bug — see D-27.** | — | **cleared** |
 | D-27 | ~~`_signal()` hardcoded `data_origin=PUBLIC`~~ **FOUND AND CLEARED 2026-08-18 (M11).** Every `RiskSignal` fired against a synthetic scenario provider had been mislabelled `public` since M4 — verified live: `phone_degree` on S02 (`9020000000`) returned `data_origin=public` for a provider whose node says `synthetic`. CLAUDE.md hard rule 5 calls unlabelled origin-mixing a hard failure, and this was it, sitting latent in all nine original detectors. It only became material when M11 attached real `public` Maps evidence to a `synthetic` provider's address, which is why it was fixed in-milestone rather than deferred. `signal_tools._provider_origin(driver, npi)` now reads the provider's own `data_origin` (lru-cached, one query per NPI per process) and **raises `SpecterError`** rather than defaulting when it is absent. Two regression tests. | — | **cleared** |
 | D-25 | **`grounded_research` still has no live consumer** — extends D-15. Confirmed 2026-08-18: the only references outside the agent module itself are in `scripts/45_smoke_grounded_research.py`. `data/evidence/` holds 7 artifacts total, so the citation trail the grounding pillar is graded on has almost no accumulated material. | D-15 has been open since M4 because no Phase 1 agent had a natural reason to call it. **The dashboard is the first natural consumer this project has ever had** — a per-case "run grounded research on this provider" endpoint would close D-15 for real. That is a scope decision for M13/M14, not an assumed default; if it is not taken, M14 must not show an empty panel captioned as if data were expected. | **DECIDED 2026-08-18: wire it.** Operator asked for live grounding explicitly. `CLAUDE.md` Amendment 4(a) amended the same day to permit one write path in the dashboard for exactly this. Vertex SA verified live — `scripts/45_smoke_grounded_research.py` returned 12 real citations — so **D-15 closes in M14**, not "unscheduled". |
+| D-28 | **M12's `IsolationForest` anomaly score barely separates the held-out synthetic scenarios from controls** — `auc=0.556` (0.5 = random), `precision@36=0.333` (0.194 = random baseline). Real result, measured on the full 6,970-provider real cohort, not a bug (M12 Result in §5 has the full analysis: the real cohort's features are heavily zero-inflated, and each synthetic scenario trips exactly one detector rather than looking anomalous across the whole vector). | Kept out of `ScoringService`/the escalation gate deliberately, per the M12 Action Plan's own instruction to report an unfavourable number honestly rather than fudge a threshold. Ships as a dashboard-only panel instead. | **M14 must caption this panel with its real weakness** — "structural anomaly score, weak separation on held-out synthetic evaluation (AUC 0.556)" or equivalent, never presented as validated or as a fraud indicator. Improving the model (better features, a supervised pass explicitly labelled as trained-on-synthetic-only, or accepting the score as illustrative-only) is Phase 2 scope, not M13/M14. |
 
 ---
 
@@ -3245,7 +3266,7 @@ distribution** (Inherited context 9), and the real Maps spend.
 
 ---
 
-### M12 — ML models as tools · `TODO`
+### M12 — ML models as tools · `DONE`
 
 **Scope.** Classical, trained, deterministic-at-inference models exposed as
 **tools**, in `src/specter/tools/ml_tools.py` — the same shape as
@@ -3473,6 +3494,116 @@ scenario providers and the 150 controls in this file's Result section.
 - [ ] `pytest`, `ruff`, `mypy` all clean
 - [ ] §2 → `DONE`; §3 replaced; §4 updated; M13's Action Plan written
 
+**Result (2026-08-18).** `DONE` — full checkpoint passed live, trained on the
+real, full 6,970-provider real cohort (not a subsample). `pytest tests/ -q` →
+**295 passed** (290 baseline + 5 new). `ruff check src/ tests/ scripts/` and
+`mypy src/` clean across 65 source files.
+
+**The honest number, not the one anyone wanted.** Trained unsupervised on the
+real cohort (6,970 rows, `data_origin='public'`, `random_state=20260101`,
+`IsolationForest(n_estimators=200, contamination="auto")`), then scored the
+held-out synthetic set (36 planted scenario providers S01-S10 vs 150 synthetic
+benign controls, **never used in fitting**):
+
+```
+held_out_synthetic_eval: auc=0.556 precision_at_36=0.333 (scenario_providers=36 controls=150)
+```
+
+AUC 0.556 is barely above the 0.5 random baseline — the anomaly score does
+**not** reliably rank the planted fraud scenarios above the benign controls.
+`precision@36` (0.333, 12/36) beats the 0.194 random baseline (36/186) by a
+real margin, so there is *some* structure the model picks up, but it is weak
+and must not be read as validated detection. Per the Action Plan's explicit
+instruction — "if it does not separate them, that is a finding worth more
+than a fudged threshold, say so and keep the model out of the escalation
+gate" — **this model stays out of `ScoringService`/the escalation gate.**
+
+**Why the separation is weak — a real hypothesis, not just noise.** The
+eleven structural features this model sees are the same ones
+`signal_tools.py`'s ten detectors already compute, and per §3's own live
+measurement, the real 244-case corpus has **zero** cases firing 3+ signal
+families (48 fire 0, 163 fire 1, 33 fire 2). Feature distributions in the
+real cohort are heavily zero-inflated — `address_degree`/`phone_degree` sit
+at 0 for the overwhelming majority of this DME-supplier cohort — so an
+unsupervised forest sees mostly-flat, mostly-zero rows with little structural
+variance to isolate on. The synthetic scenarios were each designed to trip
+**one specific detector** (`SCENARIO_EXPECTED_SIGNALS`: one signal type per
+scenario), not to look anomalous across the *whole* feature vector at once,
+which is exactly what `IsolationForest` needs. Re-verified the pipeline
+itself is honest, not buggy: a `--limit 200` dry run gave a consistent weak
+result (AUC 0.514), and the feature matrices spot-check sanely (e.g.
+`officer_degree` correctly non-zero — up to 118 — on real shared-officer
+clusters; `establishment_count`/`medical_establishment_count` correctly
+populated from M11's classifier).
+
+**Where the output goes — the Action Plan's own recommendation, now
+empirically reinforced.** Dashboard-only, read by M13's API via
+`ml_tools.score_provider(npi)`. Not a new signal type, not a tool binding
+above the cache boundary, never touched by `ScoringService`. A weak,
+honestly-labelled anomaly score is a demo panel; it is not validated
+evidence, and CLAUDE.md hard rule 8 keeps scoring deterministic-and-trusted,
+which an unvalidated unsupervised score is not.
+
+**`data/models/` is gitignored, not committed** (`.gitignore` updated
+alongside `data/evidence/`) — its sidecar cites an `EvidenceArtifact`
+`source_id` in `data/evidence/` (also gitignored), so committing one without
+the other would leave a dangling, unresolvable citation on a fresh checkout.
+Both regenerate together: `python scripts/70_train_anomaly_model.py`
+(~19 minutes on the full cohort, measured live this session).
+
+**A real cost trap, hit and fixed live.** `exclusion_proximity_feature_max_hops`
+was an open question in the Action Plan; a first attempt at 6 hops (double the
+signal's proven `max_hops=3`) made even a 10-row batch exceed two minutes — an
+unrestricted-relationship-type `shortestPath` search over a graph with 119,282
+`Exclusion` nodes is combinatorially expensive per extra hop. Capped back to 3
+(identical to `thresholds.exclusion_proximity_max_hops`, already proven at
+250-provider concurrent screening scale) and batched (250 npis/round-trip via
+`UNWIND`) so the full-cohort run bounds each query instead of one
+multi-minute call. Measured live: ~0.28s/provider at hops=3, **17m14s**
+(04:23:01 → 04:40:15) for the full cohort's `exclusion_proximity` feature
+alone — the dominant cost; every other feature together adds well under a
+minute.
+
+**Checkpoint, verbatim:**
+```
+$ python scripts/70_train_anomaly_model.py
+selected=6970 real cohort providers for unsupervised fitting
+trained_rows=6970 features=['address_degree', 'phone_degree', 'officer_degree',
+  'enumeration_burst_count', 'address_churn_count', 'exclusion_proximity_hops',
+  'community_exclusion_density', 'geographic_spread_km', 'establishment_count',
+  'medical_establishment_count', 'location_type_ordinal', 'phoenix_pattern_detected']
+  model_version=isoforest-v1
+artifact_id=a249cb4a66257c9413739cbcdaafac79ff388e1156f6bd8d676b42752506374b
+held_out_synthetic_eval: auc=0.556 precision_at_36=0.333 (scenario_providers=36 controls=150)
+
+$ python -c "from specter.tools.ml_tools import score_provider; print(score_provider('1003050550'))"
+AnomalyScore(provider_npi='1003050550', anomaly_score=0.3932615108430561,
+  model_version='isoforest-v1',
+  source_ids=['graph:provider:1003050550', 'a249cb4a66257c9413...506374b'],
+  training_set_description='IsolationForest fit unsupervised on 6970 real...',
+  known_limitations=['synthetic_dominated_training_evaluation', 'not_a_fraud_probability',
+  'unsupervised_no_validated_threshold'], data_origin=<DataOrigin.PUBLIC: 'public'>, ...)
+# both source_ids resolve: evidence_tools.validate_citations -> all_resolved=True
+
+$ pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+295 passed, 28 warnings; ruff clean; mypy clean (65 source files)
+```
+
+**Deviations from the Action Plan, all deliberate:**
+- `exclusion_proximity_feature_max_hops` fixed at 3, not left open or set
+  higher — see cost trap above.
+- `ProviderFeatures` is used by a small `provider_features()` converter
+  (typed, JSON-serializable rows, for M13) rather than being
+  `extract_features`'s own return type — `extract_features` still returns a
+  `pl.DataFrame` (Polars, not Pandas, CLAUDE.md), which is what the
+  Cypher-to-matrix pipeline and `IsolationForest`'s numpy boundary actually
+  want.
+- `extract_features` runs ~9 batched Cypher queries (one per feature, each
+  covering the *whole* npi list via `UNWIND`) rather than one monster query
+  unioning eleven differently-shaped `MATCH` patterns — simpler to write,
+  debug, and test independently, and still ~9 round trips total rather than
+  the ~70,000 a naive per-provider-per-detector approach would cost.
+
 ---
 
 ### M13 — Dashboard data API · `TODO`
@@ -3543,7 +3674,140 @@ findings".
 
 #### Action Plan
 
-(not yet written)
+**Goal.** A FastAPI app, run with `uvicorn`, exposing the real artifacts
+listed in the Scope section above as clean JSON: a cohort overview, a
+per-case detail endpoint, the judge report, and (per the operator's decision)
+one grounded-research trigger endpoint. M14 renders this; nothing in M13
+computes anything new except the one permitted write path.
+
+**Inherited context.**
+
+1. **M12 is `DONE` and gives you `ml_tools.score_provider(npi) -> AnomalyScore`**
+   (`src/specter/tools/ml_tools.py`). Call it per-case, not per-request-blind:
+   it internally opens its own Neo4j driver and loads
+   `data/models/anomaly_isoforest-v1.joblib` from disk **every call** unless
+   you pass `driver=`/`model_dir=` explicitly — for an endpoint serving many
+   providers, load the model **once** at API startup (e.g. via a FastAPI
+   lifespan/dependency that calls `ml_tools._load_model` once, or simpler:
+   call `score_provider(npi, driver=<shared driver>)` and accept the
+   per-request `joblib.load` — it's a 1.5MB file, sub-10ms, not worth
+   over-engineering unless you measure it as a real cost).
+2. **`data/models/` is gitignored** (M12, this session) — its sidecar cites
+   an `EvidenceArtifact` in `data/evidence/` (also gitignored), so both must
+   exist together. **If `data/models/anomaly_isoforest-v1.joblib` is
+   missing, `score_provider` raises `SpecterError` — that IS the correct
+   "fail loudly" behavior (hard rule 7).** Do not catch it and render an
+   empty panel; surface the real error, same as the missing-`data/cases/`
+   case the Scope section already names. If it's missing in your session,
+   run `python scripts/70_train_anomaly_model.py` first (**~19 minutes** on
+   the full 6,970-provider cohort, measured live in M12 — plan around this,
+   don't discover it mid-endpoint-build).
+3. **The anomaly score is weak — debt D-28, and the API contract must carry
+   that, not just the value.** Held-out synthetic evaluation:
+   `auc=0.556` (0.5 = random), `precision@36=0.333` (0.194 = random
+   baseline). Whatever JSON shape you return for the ML panel, include
+   `AnomalyScore.known_limitations` and `training_set_description`
+   **verbatim** — M14's caption depends on the real strings being present,
+   not summarized. Do not round this into "AI risk score: 73%" or any UI
+   language that reads as a probability (Amendment 4(b)(5), plan §16).
+4. **D-23 still open — `CaseScore`/`priority_tier` is not persisted.**
+   `workflow/screening.py:175` writes only `case_packet.model_dump_json()`;
+   `case_score` is computed and printed but discarded. Two honest options,
+   pick one and say which in your Result: (a) a ~3-line edit to persist
+   `case_score` alongside the packet, plus one fresh `scripts/40_screen.py`
+   run to backfill it — clean, but costs a real Azure re-run; (b)
+   recompute `ScoringService.score` at API-request time from the persisted
+   `CasePacket`'s signals — cheaper, but the `entity_adjudications` input
+   `ScoringService.score` also needs is not stored anywhere either, so this
+   would be an *approximation*, and it must be labelled
+   `"priority_tier_approximate": true` in the response, never presented as
+   the exact persisted value. **Do not silently pick (b) and drop the
+   caveat.**
+5. **D-24 — the real tier distribution is 0 HIGH / 196 STANDARD / 48 LOW.**
+   The cohort overview endpoint must return this real distribution, not a
+   hypothetical one. M14 charts it as-is.
+6. **The grounded-research endpoint is DECIDED, not optional** (operator,
+   2026-08-18; `CLAUDE.md` Amendment 4(a) amended same day). It is the
+   *only* write path in the whole API. Wrap
+   `agents.grounded_research.research_topic(query, agent, evidence_dir)` —
+   read `_ensure_vertex_env()` first (debt D-14: the native `Gemini` class
+   reads Vertex config from `os.environ`, not `Settings`, so the endpoint
+   must call it before constructing the agent). Every citation this endpoint
+   returns must disclose D-15's finding: `grounding_metadata` URIs are
+   **Google redirect links, not source-page URLs** — put that in the JSON
+   response, not just a code comment, so M14 can render it honestly.
+7. **`fastapi==0.141.1`, `uvicorn==0.52.1`, `jinja2==3.1.6` already
+   installed** transitively via `google-adk[mcp]` (verified 2026-08-18,
+   restated from M11/M12). No new dependency for M13.
+
+**File manifest.**
+| Path | Action | Notes |
+|---|---|---|
+| `src/specter/api/__init__.py` | CREATE | Empty. |
+| `src/specter/api/app.py` | CREATE | ~40 lines. FastAPI app factory, mounts the routers below. |
+| `src/specter/api/cases.py` | CREATE | Cohort overview + per-case detail endpoints, reading `data/cases/*.json`. |
+| `src/specter/api/costs.py` | CREATE | Wraps `llm.ledger.CostLedger` / the query `obs/dashboard.py:25-37` already runs — reuse it, don't re-derive the SQL. |
+| `src/specter/api/judge.py` | CREATE | Re-derives the judge report view from `judge/detection_eval.py` + stored calibration data, not by regexing `JudgeReport.md`. |
+| `src/specter/api/ml.py` | CREATE | Wraps `ml_tools.score_provider`, carrying `known_limitations`/`training_set_description` through untouched. |
+| `src/specter/api/research.py` | CREATE | The one write endpoint — wraps `grounded_research.research_topic`. |
+| `tests/test_api.py` | CREATE | `httpx.AsyncClient`/`TestClient` against a small fixture case set; assert the D-23/D-28 caveats are present in responses, not just the happy path. |
+
+**Read before writing.**
+1. `src/specter/tools/ml_tools.py` (whole file, ~490 lines, M12) — the exact
+   `AnomalyScore`/`score_provider` contract this milestone renders.
+2. `src/specter/workflow/screening.py:1-193`, especially `:175-184` — D-23's
+   exact discard point.
+3. `src/specter/obs/dashboard.py` (whole file, 78 lines) + `llm/ledger.py`
+   (121 lines) — the cost query to reuse.
+4. `src/specter/judge/detection_eval.py` (whole file, ~132 lines) — the
+   candour style M13's judge endpoint should read like, and the real
+   function surface to re-derive from.
+5. `src/specter/agents/grounded_research.py` + debt **D-14**/**D-15** — the
+   Vertex-env trap and the redirect-link disclosure.
+6. `config/screening.yaml`'s `ml:` block (M12) — what to echo back as
+   `model_version` alongside a score.
+
+**Steps.** *(left to the implementing session — the facts above are the
+expensive part; the FastAPI wiring itself is routine.)*
+
+**Checkpoint.**
+```bash
+uv run uvicorn specter.api.app:app --port 8000 &
+curl -s localhost:8000/cohort | python -m json.tool        # real counts, incl. 0/196/48 tier split
+curl -s localhost:8000/cases/1003050550 | python -m json.tool   # real CasePacket + AnomalyScore, both known_limitations present
+curl -s localhost:8000/costs | python -m json.tool          # cost_usd: null throughout, never 0
+curl -s localhost:8000/judge | python -m json.tool          # JUDGE INDEPENDENCE: LIMITED block present verbatim
+pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+```
+
+**Traps.**
+- **`score_provider` fails loudly on a missing model** — that's correct
+  behavior (hard rule 7), don't wrap it in a try/except that returns a fake
+  0.0 score.
+- **Don't round or rescale the anomaly score into anything that reads as a
+  probability** — Amendment 4(b)(5) is explicit, and D-28's weak AUC makes
+  this doubly important: a confident-looking number over a weak signal is
+  worse than an honest one.
+- **`cost_usd` renders `null`, never `0`** (§7.4, restated every milestone
+  that touches costs for a reason — it has been gotten wrong before).
+- **Don't recompute `priority_tier` and present it as exact** — see D-23
+  option (b) above.
+
+**Definition of done.**
+- [ ] Cohort overview, per-case detail, cost, judge, and ML endpoints all
+      return real data with no placeholder values
+- [ ] The one grounded-research write endpoint is user-triggered only, never
+      on page load; its cost appears in the ledger like every other call
+- [ ] D-28's `known_limitations`/`training_set_description` survive into the
+      ML endpoint's JSON verbatim
+- [ ] D-23 handled explicitly (persisted or clearly labelled approximate,
+      your choice, stated in the Result)
+- [ ] D-24's real 0/196/48 tier split returned as-is, not tuned
+- [ ] Missing `data/cases/`/`data/evidence/`/`data/ledger.sqlite`/
+      `data/models/` each fail with a real, specific error naming what's
+      missing and how to regenerate it
+- [ ] `pytest`, `ruff`, `mypy` all clean
+- [ ] §2 → `DONE`; §3 replaced; §4 updated; M14's Action Plan written
 
 ---
 

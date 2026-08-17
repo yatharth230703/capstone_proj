@@ -84,3 +84,38 @@ signal_families:
 escalation_gate:
   min_independent_signal_families: 3
   evidence_freshness_days: 180
+
+# M12 (CLAUDE.md Amendment 4(b)) — `IsolationForest` anomaly scorer over the
+# structural features `tools/signal_tools.py`'s detectors already compute.
+# Trained unsupervised (`scripts/70_train_anomaly_model.py`) on the real
+# cohort; NEVER a fraud probability (plan §16). Dashboard-only output — see
+# BUILD_MILESTONES.md M12 Result for why it stays out of `ScoringService`.
+ml:
+  feature_order:
+    [
+      "address_degree",
+      "phone_degree",
+      "officer_degree",
+      "enumeration_burst_count",
+      "address_churn_count",
+      "exclusion_proximity_hops",
+      "community_exclusion_density",
+      "geographic_spread_km",
+      "establishment_count",
+      "medical_establishment_count",
+      "location_type_ordinal",
+      "phoenix_pattern_detected",
+    ]
+  location_type_order:
+    ["commercial_medical", "commercial", "unclassified", "residential", "mailbox_store"]
+  # Matches thresholds.exclusion_proximity_max_hops (3) deliberately: this is
+  # the same unrestricted-relationship-type shortestPath pattern the signal
+  # detector uses, and it is already proven at 250-provider concurrent
+  # screening scale. Measured 2026-08-18: raising this to 6 made a 10-row
+  # batch exceed two minutes — do not raise it without re-measuring cost on
+  # the full ~7,000-row training cohort first.
+  exclusion_proximity_feature_max_hops: 3
+  random_state: 20260101
+  n_estimators: 200
+  contamination: "auto"
+  model_version: "isoforest-v1"
