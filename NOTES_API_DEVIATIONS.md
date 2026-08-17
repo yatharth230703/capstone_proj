@@ -985,7 +985,64 @@ added), and Maps gets a separate, restricted API key in `GOOGLE_MAPS_API_KEY`.
 `settings.google_maps_api_key` is `SecretStr | None` with `default=None`, so
 every non-M11 entry point keeps working without one.
 
-### Which Maps API — chosen on reasoning, not yet on evidence
+### RESOLVED 2026-08-18, same day: Address Validation was the WRONG choice. Measured, not guessed.
+
+The operator provisioned the key hours after the section below was written, so
+step 2's empirical comparison finally ran. **It overturned the choice.** Nine
+real addresses, all `HTTP 200`:
+
+| Address | `metadata` | `uspsData.dpvCmra` | `dpvFootnote` |
+|---|---|---|---|
+| Google HQ (office) | `{"business":true,"residential":false}` | **absent** | `A1` |
+| Suburban house, Burbank CA | **`{}`** | **absent** | `A1` |
+| UPS Store, Berkeley CA | `{"business":true,"poBox":false,"residential":false}` | **absent** | `A1` |
+| Hospital, Miami FL | `{"business":true,"poBox":false,"residential":false}` | **absent** | `A1` |
+| Apartment, 350 W 42nd St NYC | `{"business":true,"poBox":false,"residential":false}` | **absent** | `A1` |
+
+Three findings, each fatal on its own:
+
+1. **`dpvCmra` is never returned.** The `uspsData` block contains only
+   `cassProcessed`, `dpvFootnote`, `standardizedAddress`, and sometimes
+   `carrierRoute`. No `dpvCmra`, no `dpvConfirmation`, no `addressRecordType`.
+   `enableUspsCass: true` *is* honoured (`cassProcessed: true`), but
+   `dpvFootnote` is `A1` — ZIP+4 matched, delivery point **not** confirmed —
+   on every address tried, so full DPV data never arrives. The single
+   strongest mailbox-store discriminator in US address data is simply not
+   available through this surface on this project.
+2. **`metadata` is often empty**, including for a genuine suburban house —
+   the exact case the signal exists to catch.
+3. **`metadata.residential` is unreliable and appears inverted in intent.** A
+   Manhattan apartment returns `residential: false, business: true`. The flag
+   seems to answer "is there a business POI here", not "is this a residence".
+
+So `classify` as shipped puts a UPS Store and a hospital in the same bucket
+(`commercial`) and a house in `unclassified`. Useless for this signal. **The
+module is flagged superseded at the top of its own docstring.**
+
+### The replacement: Places API (New) — blocked on an operator action
+
+`POST https://places.googleapis.com/v1/places:searchText` returns `types` /
+`primaryType` per establishment, which genuinely separates
+`post_office`/shipping stores from `hospital`/`doctor`/`pharmacy`, and where
+"no establishment resolves at this address" is itself reasonable residential
+evidence. It also restores `commercial_medical`, which was dropped from
+`LocationType` because Address Validation had no category data.
+
+**Currently blocked:**
+
+```
+403 PERMISSION_DENIED  reason: API_KEY_SERVICE_BLOCKED
+    service: places.googleapis.com   consumer: projects/893764446666
+```
+
+That is "the Places API (New) is not enabled on the project, and/or the key's
+API restriction excludes it" — an operator action, not something to code
+around. Once enabled: capture real responses for the same nine addresses
+first, put them in `tests/test_maps_tools.py` as fixtures, **then** rewrite
+`classify`. Writing the classifier against a documented-but-unobserved shape is
+exactly what produced this deviation.
+
+### Which Maps API — the original reasoning, superseded above and kept for the record
 
 M11's Action Plan step 2 called for empirically comparing three candidates
 against five addresses with known answers. **That has not happened** — the

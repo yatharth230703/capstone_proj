@@ -367,9 +367,22 @@ server-rendered UI on top of it.
 
 Boundaries:
 
-- **Read-only.** The dashboard renders artifacts; it does not screen, score,
-  adjudicate, or mutate the graph. Anything that generates data belongs in a
-  script, not in an HTTP handler.
+- **Read-only, with exactly one exception.** The dashboard renders artifacts;
+  it does not screen, score, adjudicate, or mutate the graph. Anything else
+  that generates data belongs in a script, not in an HTTP handler.
+
+  **The exception, added 2026-08-18 at the operator's request: a
+  grounded-research endpoint.** `agents/grounded_research.py` has had no live
+  consumer since M4 (debt D-15), and the dashboard is the first natural one
+  this project has ever had. A per-provider "run grounded research" endpoint
+  may make a real Vertex call and write real `EvidenceArtifact`s. Conditions:
+  it is the *only* write path in the API; it is explicitly user-triggered,
+  never fired on page load or by a background poller; its cost is visible in
+  the ledger like every other call; and the citations it renders are the real
+  `grounding_metadata` URIs, with `NOTES_API_DEVIATIONS.md` D15's finding
+  (they are Google redirect links, not source-page URLs) disclosed in the UI
+  rather than papered over. Verified live 2026-08-18: the Vertex SA works and
+  a real run produced 12 citations.
 - **No new web dependency.** `fastapi` (0.141.1), `uvicorn` (0.52.1) and
   `jinja2` (3.1.6) are already installed transitively via
   `google-adk[mcp]` — confirmed 2026-08-18. Use them. A separate JS build

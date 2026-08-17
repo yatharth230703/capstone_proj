@@ -16,27 +16,37 @@ detector — an external rate-limited HTTP call inside the 4-way-concurrent
 250-provider screening fan-out is the exact failure shape
 `NOTES_API_DEVIATIONS.md` D23 documents.
 
-## UNVERIFIED — read before trusting `classify`
+## ⚠ THIS MODULE IS SUPERSEDED PENDING A REWRITE — read `NOTES_API_DEVIATIONS.md` D25
 
-The Address Validation API was chosen because it is the only Maps surface that
-returns a *direct* residential/business/CMRA discriminator rather than a
-business-category list you have to infer from. **No live call has been made
-from this project yet** (the API key is not provisioned as of 2026-08-18), so
-the response field paths below are written from documentation, not from an
-observed response:
+It was written against the Address Validation API before a key existed. **The
+key now exists and the API was measured live on 2026-08-18. It does not
+deliver the discriminator this signal needs.** Specifically, across nine real
+addresses:
 
-    result.address.formattedAddress   -> str
-    result.metadata.residential       -> bool
-    result.metadata.business          -> bool
-    result.metadata.poBox             -> bool
-    result.uspsData.dpvCmra           -> "Y" | "N"   (USPS Commercial Mail
-                                                      Receiving Agency flag —
-                                                      i.e. a mailbox store)
+- `uspsData.dpvCmra` — the USPS Commercial Mail Receiving Agency flag this
+  module treats as its strongest evidence — **is never returned at all.** The
+  `uspsData` block contains only `cassProcessed`, `dpvFootnote`,
+  `standardizedAddress` and sometimes `carrierRoute`. `dpvFootnote` is `"A1"`
+  (ZIP+4 matched, *not* delivery-point confirmed) for every address tried.
+- `metadata` is frequently `{}` — including for a genuine suburban house.
+- When populated, `metadata.residential` is `false` and `business` is `true`
+  even for a Manhattan apartment. It appears to describe "is there a business
+  POI here", not "is this a residence".
 
-`_FIELD_PATHS` below is the single place these are named. If the real response
-differs, fix the paths and the fixture in `tests/test_maps_tools.py`; nothing
-else in the module needs to change. Record what was actually true in
-`NOTES_API_DEVIATIONS.md`.
+Net effect: a UPS Store and a hospital classify identically (`commercial`), and
+a house classifies as `unclassified`. That is the exact opposite of useful for
+a signal whose whole job is separating those cases.
+
+**The replacement is the Places API (New) `searchText`**, whose `types` /
+`primaryType` genuinely distinguish `post_office`/shipping stores from
+`hospital`/`doctor`/`pharmacy`, and where "no establishment at this address" is
+itself reasonable residential evidence. It is currently blocked —
+`403 API_KEY_SERVICE_BLOCKED` — because the API is not enabled on the project.
+**Do not rewrite this module against Places until that is enabled and real
+responses have been captured**; writing a classifier against a guessed response
+shape is precisely the mistake that produced this warning.
+
+Field paths are named once, in `_FIELD_PATHS`, so the blast radius is small.
 """
 
 from __future__ import annotations
