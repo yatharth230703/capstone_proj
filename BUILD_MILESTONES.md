@@ -222,6 +222,14 @@ and `physical_existence` fires for all 30 providers at an implausible-type
 address, with every citation resolving. Full detail, including two rejected
 API choices, in M11's Result block in §5.
 
+**S01 is closed (D-26, operator-approved).** Its five providers now sit at
+real Miami residential streets, fire `physical_existence` and nothing else,
+and **`JudgeReport.md`'s headline moved from 8/8 to 9/9 scenarios with a
+Phase 1 detector detected.** Fixing it surfaced a real pre-existing
+hard-rule-5 bug (D-27): `_signal()` had hardcoded `data_origin=public`, so
+every signal on a synthetic provider had been mislabelled since M4. Fixed,
+with regression tests.
+
 **All four credentials verified live this session** (Azure chat, Azure
 embeddings, Vertex SA, Google Maps). The Azure key died a **third** time
 mid-session and was rotated again — D-20 now records four state changes.
@@ -353,8 +361,8 @@ these are new measurements, not restatements:**
 ### Verified green
 
 ```
-pytest tests/ -q          288 passed, 0 failed   (2026-08-18, end of M11 — 270 Phase 1
-                           baseline + 17 maps_tools + 1 physical_existence detector test)
+pytest tests/ -q          290 passed, 0 failed   (2026-08-18, end of M11 — 270 Phase 1
+                           baseline + 17 maps_tools + S01/data_origin regression tests)
 ruff check src/ tests/ scripts/     clean       (2026-08-18)
 mypy src/                           clean, 64 source files   (2026-08-18)
 ```
@@ -401,7 +409,8 @@ entries; the legacy Nearby Search endpoint M11 uses is enabled and works.
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
 | D-23 | **`CaseScore` is never written to disk.** `workflow/screening.py:175` persists only the `CasePacket`; the `case_score` dict travels up to `scripts/40_screen.py`, gets printed, and is dropped. Recomputing it from a persisted packet is *almost* possible — `signals`, `enforcement_matches`, `legal_status_per_match` and `counter_evidence.confidence_adjustment` are all in the packet — but **`entity_adjudications` are not persisted anywhere**, and `ScoringService.score` reads them for `identity_integrity` and for the "unresolved entity-match conflict" gate reason (`workflow/state.py:128-131`, `:159-160`). A recomputation would therefore silently assume zero conflicts, i.e. fabricate a number. Found 2026-08-18 while scoping M13. | Fixing it is a ~3-line edit (persist the per-provider summary `screen_provider` already returns, which contains `case_score.model_dump(mode="json")` in full) — but it only produces data on the **next** screening run, so it is M13's call whether to pay for a fresh run or ship a dashboard whose tier chart is recomputed-and-labelled-approximate. Do not silently recompute and present it as exact. | **M13** |
 | D-24 | **No provider in the current 244-case corpus can reach `HIGH_PRIORITY`.** Measured 2026-08-18 over the persisted packets: 48 cases fire 0 signal families, 163 fire 1, 33 fire 2, **0 fire 3** — and `config/screening.yaml`'s `escalation_gate.min_independent_signal_families` is 3 against exactly 3 defined families, so the gate currently requires *all three* to fire. Zero `enforcement_matches` across all 244 as well. The real distribution is 0 HIGH / 196 STANDARD / 48 LOW. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. It is recorded here because two upcoming milestones trip over it: **M11 adds a 4th family**, which changes what "3 of N" means and must be re-measured, not assumed; and **M14 charts the tier distribution**, which will be a bar of height zero unless something changes. Neither milestone may tune `min_independent_signal_families` to manufacture a nicer-looking demo — that is gaming the gate, and it would be a lie of exactly the kind §0.1 rule 5 exists to prevent. | **M11 re-measured it 2026-08-18 and the answer is reassuring:** the new 4th family moved 5 of 25 cases up by one family and **no case reached 3**, so no `HIGH_PRIORITY` was manufactured. Max families fired across the whole 245-case corpus is still 2. `min_independent_signal_families` untouched. **M14 must still chart the zero bar honestly.** |
-| D-26 | **S01 (`shell-at-residential`) is still undetected even though M11 shipped the classifier it was waiting for.** Its five providers sit at fabricated streets (`ingest/synthetic.py:127`, `"{100+i} Residential Ct Apt {i}", Miami FL 33101`) which do not geocode, and synthetic addresses are deliberately never sent to Maps (hard rule 5). `classify` correctly returns `unclassified`, so nothing fires. `judge/detection_eval.py:22`'s `"S01": []` and `JudgeReport.md`'s "no (by design)" both remain accurate. | Closing it honestly means planting **real** residential addresses for S01 (still `data_origin='synthetic'` on the Provider), a ~5-line edit to `ingest/synthetic.py` plus a graph reload — which mutates the frozen synthetic corpus every prior milestone's numbers were measured against, and needs the `data_origin` labelling of a `public` Maps result reached from a `synthetic` provider thought through rather than assumed. **Operator sign-off required; not taken unilaterally in M11.** Would move `JudgeReport.md`'s headline from 8/8 to 9/9 scenarios with a detector. | **operator decision — raise before M14's demo** |
+| ~~D-26~~ | ~~S01 still undetected after M11~~ **CLEARED 2026-08-18, same session, operator-approved.** S01's five providers moved onto real Miami residential streets (picked empirically — 8 candidates probed, the 5 returning `residential` with 0 establishments within 50m kept). All five now fire `physical_existence` and nothing else; `SCENARIO_EXPECTED_SIGNALS["S01"]` updated; **`JudgeReport.md` headline moved 8/8 → 9/9**. `data_origin` stays `synthetic` on the nodes, `public` on the Maps artifact. Only the `synthetic_providers` snapshot was regenerated (186 rows, unchanged count); every other frozen source was left untouched. **Fixing this surfaced a real pre-existing bug — see D-27.** | — | **cleared** |
+| D-27 | ~~`_signal()` hardcoded `data_origin=PUBLIC`~~ **FOUND AND CLEARED 2026-08-18 (M11).** Every `RiskSignal` fired against a synthetic scenario provider had been mislabelled `public` since M4 — verified live: `phone_degree` on S02 (`9020000000`) returned `data_origin=public` for a provider whose node says `synthetic`. CLAUDE.md hard rule 5 calls unlabelled origin-mixing a hard failure, and this was it, sitting latent in all nine original detectors. It only became material when M11 attached real `public` Maps evidence to a `synthetic` provider's address, which is why it was fixed in-milestone rather than deferred. `signal_tools._provider_origin(driver, npi)` now reads the provider's own `data_origin` (lru-cached, one query per NPI per process) and **raises `SpecterError`** rather than defaulting when it is absent. Two regression tests. | — | **cleared** |
 | D-25 | **`grounded_research` still has no live consumer** — extends D-15. Confirmed 2026-08-18: the only references outside the agent module itself are in `scripts/45_smoke_grounded_research.py`. `data/evidence/` holds 7 artifacts total, so the citation trail the grounding pillar is graded on has almost no accumulated material. | D-15 has been open since M4 because no Phase 1 agent had a natural reason to call it. **The dashboard is the first natural consumer this project has ever had** — a per-case "run grounded research on this provider" endpoint would close D-15 for real. That is a scope decision for M13/M14, not an assumed default; if it is not taken, M14 must not show an empty panel captioned as if data were expected. | **DECIDED 2026-08-18: wire it.** Operator asked for live grounding explicitly. `CLAUDE.md` Amendment 4(a) amended the same day to permit one write path in the dashboard for exactly this. Vertex SA verified live — `scripts/45_smoke_grounded_research.py` returned 12 real citations — so **D-15 closes in M14**, not "unscheduled". |
 
 ---
@@ -2676,15 +2685,48 @@ PINES BLVD` (a VA medical campus) returned 0 establishments and classified
 kind of thing the Skeptic exists to challenge, and it is why this signal is
 one of four families rather than a verdict.
 
-**S01 remains undetected, as predicted.** Its five providers sit at fabricated
-streets (`ingest/synthetic.py:127`) which do not geocode, and synthetic
-addresses are never sent to Maps anyway (hard rule 5). `classify` returns
-`unclassified` for a non-geocoding address, so nothing fires. Step 8's option
-— planting real residential addresses for S01 — was **not** taken; it needs
-operator sign-off and mutates the frozen synthetic corpus. Carried to §4 as
-**D-26**.
+**S01 CLOSED — Step 8 taken, with operator sign-off (D-26).** S01's five
+providers were moved from fabricated streets onto **real Miami residential
+addresses**, chosen empirically: eight candidates were run through the real
+classifier and the five that returned `residential` with **0 establishments
+within 50m** were kept; three that came back `commercial`/`commercial_medical`
+were discarded rather than forced. The street is real, the provider is not —
+`data_origin` stays `synthetic` on the Provider and Address nodes, and the
+Maps artifact is `public` evidence about a real place.
 
-`pytest tests/ -q` → **288 passed**. `ruff check src/ tests/ scripts/` and
+Verified live: all five classify `residential`, and each fires
+**`physical_existence` and nothing else** — every structural detector
+(degree/burst/churn/proximity/phoenix) correctly stays silent, which is what
+the scenario is supposed to look like. `judge/detection_eval.py`'s
+`SCENARIO_EXPECTED_SIGNALS["S01"]` is now `["physical_existence"]`, and
+**`JudgeReport.md`'s headline moved from 8/8 to 9/9 scenarios with a Phase 1
+detector detected.** S08 remains genuinely detector-less (no utilization
+data) and is unchanged.
+
+**One honest wrinkle, not smoothed over:** the *first* judge re-run after the
+change reported S01 with no fired signals (❌); an immediate second run
+reported `physical_existence` fired (✅, 9/9). `build_evidence` for S01 was
+then called three times directly and returned `['physical_existence']` every
+time, so the detector→evidence path is deterministic. The most likely
+explanation is an L1 response-cache replay of a `graph_investigation`
+response generated before the reclassification, the same class of warm-run
+variance M10 documented — but **that was not proven**, and it is recorded here
+as an unexplained one-off rather than assumed benign. If a future judge run
+shows S01 missing again, this is the first thing to look at.
+
+**A pre-existing hard-rule-5 bug was found and fixed on the way.** `_signal()`
+hardcoded `data_origin=DataOrigin.PUBLIC`, so **every signal fired against a
+synthetic scenario provider had been mislabelled `public` since M4** —
+verified live: `phone_degree` on S02 returned `data_origin=public` for a
+provider whose node says `synthetic`. That is exactly the unlabelled mixing
+hard rule 5 calls a hard failure. It was latent while nothing external
+attached to a synthetic provider; attaching real Maps evidence to one is what
+made it material, which is why it was fixed here rather than deferred to §4.
+`signal_tools._provider_origin` now reads the provider's own origin (cached,
+one query per NPI per process) and **raises** rather than defaulting if it is
+missing. Two regression tests guard it.
+
+`pytest tests/ -q` → **290 passed**. `ruff check src/ tests/ scripts/` and
 `mypy src/` clean across 64 source files. B0 regenerated and current
 (`changed=False` on re-run).
 

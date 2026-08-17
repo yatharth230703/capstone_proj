@@ -91,7 +91,7 @@ def _scenario_table(report: DetectionEvalReport) -> str:
     lines.append(
         f"**Headline: {hits}/{len(with_detector)} scenarios with a Phase 1 detector "
         "were detected.** The remaining scenarios have no Phase 1 detector by design "
-        "(no address-type classification, no utilization data) and are reported "
+        "(no utilization data) and are reported "
         "separately above rather than folded into a misleading 10/10."
     )
     return "\n".join(lines)

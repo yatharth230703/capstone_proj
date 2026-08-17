@@ -58,19 +58,44 @@ def _npi(scenario_num: int, index: int) -> str:
     return f"9{scenario_num:02d}{index:07d}"
 
 
-def test_s01_shell_at_residential_fires_no_signal(
+def test_s01_shell_at_residential_fires_only_physical_existence(
     driver: Driver, thresholds: ScreeningThresholds
 ) -> None:
+    """M11 + D-26: S01's five providers now sit at real Miami residential
+    streets, so the address-type classifier the scenario was planted for can
+    finally see them. Every *structural* detector must still stay silent —
+    S01 shares nothing with anything, and a degree/burst/churn signal here
+    would mean the fixture had drifted.
+
+    Requires the addresses to have been classified:
+        python scripts/60_classify_addresses.py --scenario S01 --include-synthetic
+    """
     npi = _npi(1, 0)
     assert st.address_degree(driver, npi, thresholds) is None
     assert st.phone_degree(driver, npi, thresholds) is None
     assert st.officer_degree(driver, npi, thresholds) is None
-    # M11 added the address-type classifier S01 was waiting for, but S01's
-    # addresses are fabricated streets (`ingest/synthetic.py:127`) and synthetic
-    # addresses are deliberately never sent to Maps (hard rule 5), so this stays
-    # None. Closing S01 for real needs the operator's sign-off to plant real
-    # residential addresses — M11 Action Plan step 8.
-    assert st.physical_existence(driver, npi, thresholds) is None
+    assert st.address_churn(driver, npi, thresholds) is None
+    assert st.phoenix_pattern(driver, npi, thresholds) is None
+
+    signal = st.physical_existence(driver, npi, thresholds)
+    if signal is None:
+        pytest.skip("S01 addresses not yet classified — run scripts/60_classify_addresses.py")
+    assert signal.value >= thresholds.physical_existence_min_colocated
+    assert signal.source_ids
+    # Hard rule 5: the provider is synthetic, so the signal must say so. Before
+    # M11 `_signal` hardcoded PUBLIC and this assertion would have failed.
+    assert signal.data_origin.value == "synthetic"
+
+
+def test_signal_data_origin_follows_the_provider(
+    driver: Driver, thresholds: ScreeningThresholds
+) -> None:
+    """CLAUDE.md hard rule 5. `_signal` used to hardcode `public`, which
+    mislabelled every signal fired against a synthetic scenario provider.
+    """
+    synthetic = st.phone_degree(driver, _npi(2, 0), thresholds)
+    assert synthetic is not None
+    assert synthetic.data_origin.value == "synthetic"
 
 
 def test_physical_existence_is_none_for_an_unclassified_address(

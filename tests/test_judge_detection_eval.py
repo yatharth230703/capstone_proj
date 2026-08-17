@@ -15,6 +15,7 @@ from neo4j import Driver, GraphDatabase
 from specter.core.contracts import CasePacket, CitationReport, CounterEvidence, RiskSignal
 from specter.core.enums import DataOrigin
 from specter.judge.detection_eval import (
+    SCENARIO_EXPECTED_SIGNALS,
     build_report,
     false_positive_rate,
     precision_at_k,
@@ -67,11 +68,28 @@ def test_scenario_recall_none_case_is_a_miss_when_detector_exists() -> None:
 
 
 def test_scenario_recall_no_detector_scenarios_always_hit() -> None:
-    # S01/S08 have expected_signals=[] — no Phase 1 detector by design.
-    for scenario_id in ("S01", "S08"):
-        result = scenario_recall(scenario_id, _empty_case("x", []))
-        assert result.detector_exists is False
-        assert result.recall_hit is True
+    """S08 alone now: Phase 1 has no utilization data, so it is genuinely
+    undetectable and must not be counted as a miss.
+
+    **S01 was in this list until M11.** It gained a real detector
+    (`physical_existence`, the Maps address-type classifier) and its providers
+    were moved onto real residential streets (D-26), so it is now held to the
+    same standard as every other scenario — see the test below.
+    """
+    result = scenario_recall("S08", _empty_case("x", []))
+    assert result.detector_exists is False
+    assert result.recall_hit is True
+
+
+def test_s01_now_has_a_detector_and_is_held_to_it() -> None:
+    """Guards the D-26 change from being silently reverted: if someone drops
+    `physical_existence` from S01's expectations, the headline recall number
+    would quietly get easier rather than the regression being visible.
+    """
+    assert SCENARIO_EXPECTED_SIGNALS["S01"] == ["physical_existence"]
+    assert scenario_recall("S01", _empty_case("x", [])).detector_exists is True
+    assert scenario_recall("S01", _empty_case("x", [])).recall_hit is False
+    assert scenario_recall("S01", _empty_case("x", ["physical_existence"])).recall_hit is True
 
 
 def test_precision_at_k_ranks_by_signal_count() -> None:

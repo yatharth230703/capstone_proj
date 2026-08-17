@@ -18,8 +18,16 @@ from specter.core.contracts import CasePacket, DetectionEvalReport, ScenarioReca
 # ingest/synthetic.py's _scenario_01..._scenario_10 (verified live pre-M9) —
 # design-time knowledge, not loaded from the graph (Provider nodes carry
 # `scenario_id` but not `expected_signals`).
+#
+# M11 update: S01 is no longer detector-less. The Maps address-type classifier
+# CLAUDE.md Amendment 3 deferred now exists (`physical_existence`), and S01's
+# five providers were moved onto real residential streets so it can see them
+# (BUILD_MILESTONES.md D-26, operator-approved). Verified live 2026-08-18: all
+# five classify `residential` with 0 establishments within 50m and fire
+# `physical_existence` and nothing else. **S08 is still genuinely
+# detector-less** — Phase 1 has no utilization data — and must stay `[]`.
 SCENARIO_EXPECTED_SIGNALS: dict[str, list[str]] = {
-    "S01": [],
+    "S01": ["physical_existence"],
     "S02": ["phone_degree"],
     "S03": ["address_degree", "enumeration_burst"],
     "S04": ["officer_degree"],

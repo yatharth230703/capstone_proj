@@ -7,6 +7,7 @@ Each function queries Neo4j directly and returns a `RiskSignal` (with the
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import structlog
@@ -15,6 +16,7 @@ from neo4j import Driver
 
 from specter.core.contracts import RiskSignal, ScreeningThresholds
 from specter.core.enums import DataOrigin
+from specter.core.errors import SpecterError
 from specter.tools.entity_tools import haversine_km, zip_centroid
 from specter.tools.maps_tools import CLASSIFICATION_LIMITATIONS
 
@@ -30,7 +32,36 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+@lru_cache(maxsize=8192)
+def _provider_origin(driver: Driver, npi: str) -> DataOrigin:
+    """The provider's own `data_origin`, cached per process.
+
+    CLAUDE.md hard rule 5 puts `data_origin` on every node, edge **and
+    signal**, and mixing them unlabelled is a hard failure. Until M11 this
+    helper did not exist and `_signal` hardcoded `PUBLIC`, so every signal
+    fired against a synthetic scenario provider (S01-S10) was labelled
+    `public` — verified live: `phone_degree` on S02 returned
+    `data_origin=public` for a provider whose node says `synthetic`. That was
+    latent and harmless while nothing external attached to a synthetic
+    provider; M11's Maps evidence is external, which is what forced the fix.
+
+    Raises rather than defaulting: an unlabelled origin is precisely the
+    condition hard rule 5 exists to catch (hard rule 7, fail loudly).
+    """
+    with driver.session() as session:
+        record = session.run(
+            "MATCH (p:Provider {npi: $npi}) RETURN p.data_origin AS origin", npi=npi
+        ).single()
+    if record is None or record["origin"] is None:
+        raise SpecterError(
+            f"provider {npi} has no data_origin — refusing to emit a signal with an "
+            "unlabelled origin (CLAUDE.md hard rule 5)"
+        )
+    return DataOrigin(record["origin"])
+
+
 def _signal(
+    driver: Driver,
     signal_type: str,
     npi: str,
     value: float,
@@ -41,7 +72,7 @@ def _signal(
 ) -> RiskSignal:
     return RiskSignal(
         signal_type=signal_type, provider_npi=npi, value=value, threshold=threshold,
-        source_ids=source_ids, data_origin=DataOrigin.PUBLIC, detected_at=_now(),
+        source_ids=source_ids, data_origin=_provider_origin(driver, npi), detected_at=_now(),
         known_limitations=known_limitations or [], geocoding_method=geocoding_method,
     )
 
@@ -60,7 +91,7 @@ def address_degree(driver: Driver, npi: str, thresholds: ScreeningThresholds) ->
     if record is None or record["degree"] < thresholds.address_degree:
         return None
     return _signal(
-        "address_degree", npi, float(record["degree"]), thresholds.address_degree,
+        driver, "address_degree", npi, float(record["degree"]), thresholds.address_degree,
         [f"graph:address:{record['key']}"],
     )
 
@@ -79,7 +110,7 @@ def phone_degree(driver: Driver, npi: str, thresholds: ScreeningThresholds) -> R
     if record is None or record["degree"] < thresholds.phone_degree:
         return None
     return _signal(
-        "phone_degree", npi, float(record["degree"]), thresholds.phone_degree,
+        driver, "phone_degree", npi, float(record["degree"]), thresholds.phone_degree,
         [f"graph:phone:{record['key']}"],
     )
 
@@ -98,7 +129,7 @@ def officer_degree(driver: Driver, npi: str, thresholds: ScreeningThresholds) ->
     if record is None or record["degree"] < thresholds.officer_degree:
         return None
     return _signal(
-        "officer_degree", npi, float(record["degree"]), thresholds.officer_degree,
+        driver, "officer_degree", npi, float(record["degree"]), thresholds.officer_degree,
         [f"graph:officer:{record['key']}"],
     )
 
@@ -127,7 +158,7 @@ def enumeration_burst(
     if best_count < thresholds.enumeration_burst_count:
         return None
     return _signal(
-        "enumeration_burst", npi, float(best_count), thresholds.enumeration_burst_count,
+        driver, "enumeration_burst", npi, float(best_count), thresholds.enumeration_burst_count,
         [f"graph:address:{record['key']}"],
     )
 
@@ -149,7 +180,7 @@ def address_churn(driver: Driver, npi: str, thresholds: ScreeningThresholds) -> 
     if len(recent) < thresholds.address_churn_count:
         return None
     return _signal(
-        "address_churn", npi, float(len(recent)), thresholds.address_churn_count,
+        driver, "address_churn", npi, float(len(recent)), thresholds.address_churn_count,
         [f"graph:provider:{npi}"],
     )
 
@@ -171,7 +202,7 @@ def exclusion_proximity(
     if record is None:
         return None
     return _signal(
-        "exclusion_proximity", npi, float(record["hops"]), float(max_hops),
+        driver, "exclusion_proximity", npi, float(record["hops"]), float(max_hops),
         [f"graph:exclusion:{record['exclusion_id']}"],
     )
 
@@ -198,7 +229,7 @@ def community_exclusion_density(
     if density < thresholds.community_exclusion_density_min_fraction:
         return None
     return _signal(
-        "community_exclusion_density", npi, density,
+        driver, "community_exclusion_density", npi, density,
         thresholds.community_exclusion_density_min_fraction,
         [f"graph:community:{record['community_id']}"],
     )
@@ -256,7 +287,7 @@ def geographic_spread(
     if any_unmatched:
         limitations.append("incomplete_geocoding")
     return _signal(
-        "geographic_spread", npi, best_distance, thresholds.geographic_spread_min_km,
+        driver, "geographic_spread", npi, best_distance, thresholds.geographic_spread_min_km,
         [f"graph:officer:{best['officer_id']}", f"graph:provider:{best['peer_npi']}"],
         known_limitations=limitations,
         geocoding_method="zcta_centroid",
@@ -307,7 +338,7 @@ def physical_existence(
     if record["artifact_id"]:
         source_ids.append(str(record["artifact_id"]))
     return _signal(
-        "physical_existence", npi, float(record["colocated"]),
+        driver, "physical_existence", npi, float(record["colocated"]),
         thresholds.physical_existence_min_colocated, source_ids,
         known_limitations=[*CLASSIFICATION_LIMITATIONS, f"type:{record['location_type']}"],
     )
@@ -337,6 +368,6 @@ def phoenix_pattern(driver: Driver, npi: str, thresholds: ScreeningThresholds) -
     if enum_date < excl_date or months_between > max_months:
         return None
     return _signal(
-        "phoenix_pattern", npi, float(months_between), float(max_months),
+        driver, "phoenix_pattern", npi, float(months_between), float(max_months),
         [f"graph:provider:{record['old_npi']}", f"graph:exclusion:{record['exclusion_id']}"],
     )

@@ -13,20 +13,21 @@ shaped rows, NPPES-schema-compatible) and `SyntheticExclusionsConnector`
 documented at the top of `_generate_providers`/`_generate_exclusions`.
 
 Per-scenario signal mapping against the 9 real `signal_tools.py` detectors
-(plan §8) — S01 and S08 are deliberately signal-less: neither residential-
-address classification nor utilization-gap detection exists in Phase 1
-(plan's own admission in §15: "S08 missed because Phase 1 has no utilization
-data"). A test asserting *no* signal fires is the correct test for those two,
-not a bug to work around.
+(plan §8). **S01 gained a detector in M11** — `physical_existence`, the Maps
+address-type classifier CLAUDE.md Amendment 3 deferred and Amendment 4(c)
+authorized — so it is no longer signal-less. **S08 still is**: no utilization
+data exists in Phase 1 (plan's own admission in §15: "S08 missed because
+Phase 1 has no utilization data"), and a test asserting *no* signal fires is
+the correct test for it, not a bug to work around.
 
-    S01 shell-at-residential      -> (none — no address-type classifier)
+    S01 shell-at-residential      -> physical_existence  (M11; real addresses)
     S02 shared phone               -> phone_degree
     S03 address cluster            -> address_degree, enumeration_burst
     S04 officer reuse              -> officer_degree
     S05 near an excluded peer      -> exclusion_proximity
     S06 phoenix entity             -> phoenix_pattern
     S07 rapid address churn        -> address_churn
-    S08 dormant reactivation       -> (none — no utilization data)
+    S08 dormant reactivation       -> (none — no utilization data, by design)
     S09 geographic implausibility  -> geographic_spread
     S10 dense excluded community   -> community_exclusion_density
 """
@@ -119,17 +120,47 @@ def _base_provider(
     }
 
 
+# Real single-family residential addresses in the Miami area, used by S01.
+#
+# M11 (BUILD_MILESTONES.md D-26, operator-approved) replaced the previous
+# fabricated streets (`"{100+i} Residential Ct Apt {i}", Miami FL 33101`).
+# Those did not geocode, so the address-type classifier M11 shipped returned
+# `unclassified` and S01 — the one scenario planted specifically for that
+# classifier — could never fire.
+#
+# The *street* is real; the *provider* is not. `data_origin` stays `synthetic`
+# on every Provider and Address node generated here, and the Maps artifact
+# describing the street is `public` evidence about a real place. That split is
+# the honest one and it is exactly what CLAUDE.md hard rule 5 asks for —
+# labelled, not merged.
+#
+# Each was verified live against the real classifier on 2026-08-18 and returned
+# `residential` with **0 establishments within 50m**. Candidates that came back
+# `commercial`/`commercial_medical` were discarded rather than forced. If Google's
+# data shifts and one of these stops classifying residential, that is a real
+# change to observe, not something to paper over — re-verify, don't re-pick to
+# preserve a passing test.
+_S01_ADDRESSES: list[tuple[str, str, str]] = [
+    ("7920 SW 102nd St", "Miami", "33173"),
+    ("1145 NE 96th St", "Miami Shores", "33138"),
+    ("8330 SW 142nd Ave", "Miami", "33183"),
+    ("630 NE 92nd St", "Miami Shores", "33138"),
+    ("1250 NE 103rd St", "Miami Shores", "33138"),
+]
+
+
 def _scenario_01(rows: list[dict[str, Any]]) -> None:
-    """Shell providers at residential-sounding addresses — each isolated, no
-    sharing with anything. No detector in Phase 1 classifies address type,
-    so this deliberately produces zero signals.
+    """Shell providers at real residential addresses — each isolated, no
+    sharing with anything. Every *structural* detector (degree, burst, churn,
+    proximity) must stay silent; the only thing that should fire is M11's
+    `physical_existence`, which is the whole point of the scenario.
     """
-    for i in range(5):
+    for i, (street, city, zip5) in enumerate(_S01_ADDRESSES):
         rows.append(
             _base_provider(
-                _npi(1, i), f"S01 Shell Provider {i}", f"{100 + i} Residential Ct Apt {i}",
-                "Miami", "FL", "33101", f"305555{1000 + i:04d}", "Pat", f"Resident{i}",
-                _SEED_DATE, "S01", [],
+                _npi(1, i), f"S01 Shell Provider {i}", street,
+                city, "FL", zip5, f"305555{1000 + i:04d}", "Pat", f"Resident{i}",
+                _SEED_DATE, "S01", ["physical_existence"],
             )
         )
 

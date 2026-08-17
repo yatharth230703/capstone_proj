@@ -16,10 +16,17 @@ Idempotent and resumable: the selection query skips anything already carrying a
 `location_type`, and orders deterministically, so re-running after an
 interruption picks up exactly where it stopped.
 
-Only `data_origin='public'` addresses are classified. Synthetic addresses are
-never sent to Google — they are fabricated streets Google cannot classify, and
-storing a `public` Maps result against a `synthetic` provider would mix origins
-inside one case packet, which CLAUDE.md hard rule 5 calls a hard failure.
+Only `data_origin='public'` addresses are classified by default. Most synthetic
+addresses are fabricated streets Google cannot classify, so spending a call on
+them is waste.
+
+`--include-synthetic` is the deliberate opt-in, added for S01 (D-26): its five
+providers were moved onto **real** residential streets so the classifier this
+milestone shipped can actually see them. Hard rule 5 is satisfied by *labelling*,
+not by refusing to look — the Address node stays `data_origin='synthetic'`, the
+Maps artifact is `public` evidence about a real street, and
+`signal_tools._provider_origin` stamps the resulting signal with the provider's
+own origin rather than a hardcoded `public`.
 """
 
 from __future__ import annotations
@@ -48,7 +55,8 @@ _CASES_DIR = _REPO_ROOT / "data" / "cases"
 # reproducible, the same discipline `workflow/state.cohort_select` uses.
 _SELECT = """
 MATCH (a:Address)
-WHERE a.data_origin = 'public' AND a.location_type IS NULL
+WHERE ($include_synthetic OR a.data_origin = 'public')
+  AND a.location_type IS NULL
   AND a.street_number IS NOT NULL AND a.street_name IS NOT NULL
   AND a.zip5 IS NOT NULL
   AND ($keys IS NULL OR a.normalized_key IN $keys)
@@ -95,9 +103,38 @@ def _confirm_maps_key_alive(settings: Settings) -> str:
     return key
 
 
-def _rows(driver: Driver, limit: int, keys: list[str] | None) -> list[dict[str, str | None]]:
+def _rows(
+    driver: Driver, limit: int, keys: list[str] | None, include_synthetic: bool
+) -> list[dict[str, str | None]]:
     with driver.session() as session:
-        return [dict(r) for r in session.run(_SELECT, limit=limit, keys=keys)]
+        return [
+            dict(r)
+            for r in session.run(
+                _SELECT, limit=limit, keys=keys, include_synthetic=include_synthetic
+            )
+        ]
+
+
+def _scenario_keys(driver: Driver, scenario_id: str) -> list[str]:
+    """Addresses of a synthetic scenario's providers, selected by
+    `scenario_id` directly — debt D-17 means `cohort_select` can never reach
+    them (no `HAS_TAXONOMY` edge), so scenario-id lookup is the only way in,
+    same as M3/M5/M9's smoke scripts already do.
+    """
+    with driver.session() as session:
+        keys = [
+            r["key"]
+            for r in session.run(
+                """
+                MATCH (p:Provider {scenario_id: $scenario_id})-[:LOCATED_AT]->(a:Address)
+                RETURN DISTINCT a.normalized_key AS key ORDER BY key
+                """,
+                scenario_id=scenario_id,
+            )
+        ]
+    if not keys:
+        raise RuntimeError(f"no addresses found for scenario {scenario_id}")
+    return keys
 
 
 def _screened_keys(driver: Driver) -> list[str]:
@@ -125,7 +162,9 @@ def _screened_keys(driver: Driver) -> list[str]:
         ]
 
 
-def main(limit: int, screened_only: bool) -> None:
+def main(
+    limit: int, screened_only: bool, include_synthetic: bool, scenario: str | None
+) -> None:
     settings = get_settings()
     print("Confirming Google Maps key is live...")
     api_key = _confirm_maps_key_alive(settings)
@@ -137,8 +176,12 @@ def main(limit: int, screened_only: bool) -> None:
         auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
     )
     try:
-        keys = _screened_keys(driver) if screened_only else None
-        rows = _rows(driver, limit, keys)
+        keys: list[str] | None = None
+        if scenario:
+            keys = _scenario_keys(driver, scenario)
+        elif screened_only:
+            keys = _screened_keys(driver)
+        rows = _rows(driver, limit, keys, include_synthetic)
         print(f"selected={len(rows)} addresses to classify")
 
         counts: dict[str, int] = {}
@@ -217,5 +260,20 @@ if __name__ == "__main__":
         action="store_true",
         help="only the addresses of providers with a persisted CasePacket",
     )
+    parser.add_argument(
+        "--include-synthetic",
+        action="store_true",
+        help=(
+            "also classify synthetic-origin addresses. OFF by default (CLAUDE.md hard "
+            "rule 5). Only S01's addresses are real streets and worth spending a call "
+            "on; every other synthetic address is fabricated and will not geocode."
+        ),
+    )
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="only the addresses of a synthetic scenario's providers, e.g. S01 "
+        "(implies --include-synthetic is also needed for them to be selected)",
+    )
     args = parser.parse_args()
-    main(args.limit, args.screened_only)
+    main(args.limit, args.screened_only, args.include_synthetic, args.scenario)
