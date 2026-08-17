@@ -52,6 +52,15 @@ _STATE_PROMPT_TOKENS = "specter_prompt_tokens"
 _STATE_CACHED_TOKENS = "specter_cached_tokens"
 _STATE_COMPLETION_TOKENS = "specter_completion_tokens"
 
+# Inputs, not outputs: `_invoke` knows `compiled.prompt_version` and
+# `evidence.provider_npi` before the run starts, but `before_model_callback`
+# (in `_base.py`) is where the span with the actual model-call context is
+# active — so these are handed down via initial session state instead of a
+# closure, the same state-passing mechanism the four keys above use in
+# reverse (callback -> `_invoke`).
+_STATE_INPUT_PROMPT_VERSION = "specter_input_prompt_version"
+_STATE_INPUT_PROVIDER_NPI = "specter_input_provider_npi"
+
 
 def _final_text(event: Any) -> str | None:
     if not (event.is_final_response() and event.content and event.content.parts):
@@ -130,9 +139,15 @@ async def _invoke(
     started = time.perf_counter()
     final_text: str | None = None
 
+    initial_state: dict[str, Any] = {_STATE_INPUT_PROMPT_VERSION: compiled.prompt_version}
+    if evidence.provider_npi:
+        initial_state[_STATE_INPUT_PROVIDER_NPI] = evidence.provider_npi
+
     runner = Runner(app_name=_APP_NAME, agent=agent, session_service=session_service)
     try:
-        session = await session_service.create_session(app_name=_APP_NAME, user_id=_USER_ID)
+        session = await session_service.create_session(
+            app_name=_APP_NAME, user_id=_USER_ID, state=initial_state
+        )
         async for event in runner.run_async(
             user_id=_USER_ID,
             session_id=session.id,

@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from specter.core.contracts import ScreeningThresholds
 from specter.tools import entity_tools, evidence_tools, graph_tools
+from specter.tools._wrap import traced_tools
 from specter.tools.signal_bindings import build_signal_bindings
 
 
@@ -258,16 +259,18 @@ def build_tool_bindings(
         report = evidence_tools.validate_citations(source_ids, driver, evidence_dir)
         return report.model_dump(mode="json")
 
-    return [
-        get_provider_profile,
-        expand_neighborhood,
-        find_shared_attribute_peers,
-        shortest_path_to_exclusion,
-        get_community_context,
-        search_enforcement_cases,
-        *build_signal_bindings(driver, thresholds),
-        normalize_address,
-        name_similarity,
-        propose_entity_matches,
-        validate_citations,
-    ]
+    return traced_tools(
+        [
+            get_provider_profile,
+            expand_neighborhood,
+            find_shared_attribute_peers,
+            shortest_path_to_exclusion,
+            get_community_context,
+            search_enforcement_cases,
+            *build_signal_bindings(driver, thresholds),
+            normalize_address,
+            name_similarity,
+            propose_entity_matches,
+            validate_citations,
+        ]
+    )

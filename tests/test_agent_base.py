@@ -11,10 +11,13 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools.function_tool import FunctionTool
+from google.genai import types as genai_types
 from neo4j import Driver
 
 import specter.agents._base as agent_base
@@ -24,7 +27,11 @@ from specter.agents._base import (
     build_agent,
     run_agent,
 )
-from specter.agents._llm_call import _parse_output
+from specter.agents._llm_call import (
+    _STATE_INPUT_PROMPT_VERSION,
+    _STATE_INPUT_PROVIDER_NPI,
+    _parse_output,
+)
 from specter.agents.data_quality import build_evidence
 from specter.core.contracts import (
     AgentRunResult,
@@ -109,6 +116,104 @@ def test_agent_instruction_stays_below_the_boundary(runtime: AgentRuntime) -> No
     )
     assert "Role: Data Quality Agent" in agent.instruction
     assert "Role: Data Quality Agent" not in cast(str, agent.static_instruction)
+
+
+def test_before_model_sets_prompt_version_and_provider_npi_spans(
+    runtime: AgentRuntime,
+) -> None:
+    """M8: `_llm_call._invoke` hands these down via initial session state
+    (evidence isn't known yet when `build_agent` constructs the closure), so
+    this exercises the real `before_model_callback` directly rather than
+    monkeypatching `_invoke` like the escalation test does.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    before_model = agent.before_model_callback
+    assert before_model is not None
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    request = LlmRequest(
+        model="test",
+        config=genai_types.GenerateContentConfig(
+            system_instruction=agent.static_instruction
+        ),
+    )
+    state = {
+        _STATE_INPUT_PROMPT_VERSION: "policy-v1",
+        _STATE_INPUT_PROVIDER_NPI: "1003001439",
+    }
+    context = cast(Any, SimpleNamespace(state=state))
+
+    with tracer.start_as_current_span("test-model-call"):
+        before_model(callback_context=context, llm_request=request)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert span.attributes["specter.prompt_version"] == "policy-v1"
+    assert span.attributes["specter.provider_npi"] == "1003001439"
+
+
+def test_before_model_omits_provider_npi_when_evidence_carries_none(
+    runtime: AgentRuntime,
+) -> None:
+    """`specter.provider_npi` is only meaningful for provider-scoped agents —
+    it must be omitted, not written as `""`, when the evidence bundle has no
+    NPI (e.g. a non-provider-scoped agent call).
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    before_model = agent.before_model_callback
+    assert before_model is not None
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    request = LlmRequest(
+        model="test",
+        config=genai_types.GenerateContentConfig(
+            system_instruction=agent.static_instruction
+        ),
+    )
+    state = {_STATE_INPUT_PROMPT_VERSION: "policy-v1"}
+    context = cast(Any, SimpleNamespace(state=state))
+
+    with tracer.start_as_current_span("test-model-call"):
+        before_model(callback_context=context, llm_request=request)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert "specter.provider_npi" not in span.attributes
+    assert span.attributes["specter.prompt_version"] == "policy-v1"
 
 
 def test_agent_name_must_be_python_identifier(runtime: AgentRuntime) -> None:

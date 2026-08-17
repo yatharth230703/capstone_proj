@@ -46,6 +46,8 @@ from specter.agents._errors import AgentOutputError, PrefixInstabilityError
 from specter.agents._llm_call import (
     _STATE_CACHED_TOKENS,
     _STATE_COMPLETION_TOKENS,
+    _STATE_INPUT_PROMPT_VERSION,
+    _STATE_INPUT_PROVIDER_NPI,
     _STATE_PREFIX_FINGERPRINT,
     _STATE_PROMPT_TOKENS,
     _invoke,
@@ -178,6 +180,12 @@ def _build_agent_with_instruction(
         span.set_attribute("specter.tier", tier.name)
         span.set_attribute("specter.model", tier.model)
         span.set_attribute("specter.prefix_fingerprint", expected_fingerprint)
+        prompt_version = callback_context.state.get(_STATE_INPUT_PROMPT_VERSION)
+        if prompt_version:
+            span.set_attribute("specter.prompt_version", prompt_version)
+        provider_npi = callback_context.state.get(_STATE_INPUT_PROVIDER_NPI)
+        if provider_npi:
+            span.set_attribute("specter.provider_npi", provider_npi)
         return None
 
     def after_model(callback_context: Context, llm_response: LlmResponse) -> LlmResponse | None:

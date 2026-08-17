@@ -29,6 +29,7 @@ dependencies = [
     "opentelemetry-sdk==1.42.1",
     "opentelemetry-exporter-otlp==1.42.1",
     "fastexcel==0.16.0",
+    "rich>=15.0.0",
 ]
 
 [dependency-groups]
