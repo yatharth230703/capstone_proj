@@ -123,6 +123,10 @@ def test_s07_rapid_churn_fires_address_churn(
     signal = st.address_churn(driver, npi, thresholds)
     assert signal is not None
     assert signal.value >= thresholds.address_churn_count
+    # source_ids must resolve via evidence_tools' graph:<type>:<key> scheme —
+    # a composite multi-part key (e.g. embedding the change date) never
+    # resolves and fails citation validation downstream (M9 live finding).
+    assert signal.source_ids == [f"graph:provider:{npi}"]
 
 
 def test_s08_dormant_reactivation_fires_no_signal(

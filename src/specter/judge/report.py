@@ -100,13 +100,22 @@ def _scenario_table(report: DetectionEvalReport) -> str:
 def _rubric_distribution(verdicts: dict[str, JudgeVerdict]) -> str:
     if not verdicts:
         return "No case corpus had a rubric judgment run."
-    lines = ["| Provider NPI | " + " | ".join(sorted({
-        c for v in verdicts.values() for s in v.samples for c in {sc.criterion for sc in s.criteria}
-    })) + " | Low-reliability criteria |"]
-    lines.append("|---" * (len(lines[0].split("|")) - 2) + "|")
+    # Fixed column set across every row — a criterion excluded from one
+    # verdict's aggregate_scores (flagged low_reliability) must still render
+    # as "—" in its own column, not shift every later column left. A live
+    # M9 run confirmed this misaligns without the fill: 1003001439 excluded
+    # `hallucination`, and its 4 remaining scores rendered under the wrong
+    # header cells relative to rows with all 5 present.
+    all_criteria = sorted(
+        {sc.criterion for v in verdicts.values() for s in v.samples for sc in s.criteria}
+    )
+    lines = ["| Provider NPI | " + " | ".join(all_criteria) + " | Low-reliability criteria |"]
+    lines.append("|---" * (len(all_criteria) + 2) + "|")
     for npi, verdict in sorted(verdicts.items()):
-        criteria = sorted(verdict.aggregate_scores)
-        scores = " | ".join(f"{verdict.aggregate_scores[c]:.1f}" for c in criteria)
+        scores = " | ".join(
+            f"{verdict.aggregate_scores[c]:.1f}" if c in verdict.aggregate_scores else "—"
+            for c in all_criteria
+        )
         lines.append(f"| {npi} | {scores} | {', '.join(verdict.low_reliability_criteria) or '—'} |")
     return "\n".join(lines)
 
@@ -138,6 +147,7 @@ def render_report(
     judge_verdicts: dict[str, JudgeVerdict],
     calibration: list[tuple[CalibrationCase, JudgeVerdict]],
     disagreements: dict[str, list[str]],
+    skipped_scenarios: dict[str, str] | None = None,
 ) -> str:
     n_caught, calibration_notes = calibration_accuracy(calibration)
 
@@ -154,7 +164,7 @@ def render_report(
         or ["None observed."]
     )
 
-    return "\n\n".join([
+    sections = [
         _LIMITATION_BLOCK.format(n_caught=n_caught),
         "## Deterministic checks (PRIMARY)\n\n" + "\n".join(det_lines),
         "## Detection evaluation\n\n" + _detection_table(detection),
@@ -164,4 +174,15 @@ def render_report(
         "## Rubric judge scores (SECONDARY)\n\n" + _rubric_distribution(judge_verdicts),
         "## Deterministic-vs-LLM disagreement\n\n" + "\n".join(disagreement_lines),
         "## Three worst-scoring cases\n\n" + _worst_cases(judge_verdicts),
-    ]) + "\n"
+    ]
+    if skipped_scenarios:
+        skipped_lines = [
+            f"- **{sid}**: {reason}" for sid, reason in sorted(skipped_scenarios.items())
+        ]
+        sections.append(
+            "## Skipped scenarios (live agent-chain failure, not silently dropped)\n\n"
+            + "\n".join(skipped_lines)
+            + "\n\nThese scenarios' per-scenario recall above reflects zero fired signals "
+            "because no CasePacket could be built, not that the pattern was evaluated and missed."
+        )
+    return "\n\n".join(sections) + "\n"

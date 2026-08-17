@@ -53,3 +53,56 @@ def test_blind_case_is_case_insensitive() -> None:
     case.narrative = "This case was reviewed by an AGENT twice."
     with pytest.raises(ProvenanceLeakError):
         blind_case(case)
+
+
+def test_blind_case_allows_registered_agent_domain_vocabulary() -> None:
+    # M9 live finding: the Skeptic's own reasoning legitimately used
+    # "registered-agent style address" (shell-company investigation
+    # vocabulary) on the very first real judge run — this must not raise.
+    case = _real_case()
+    case.narrative = (
+        "The address matches a registered-agent style address commonly used "
+        "by shell entities, and a registered agent alone is not proof of fraud."
+    )
+    blinded = blind_case(case)
+    assert "registered" in blinded.narrative.lower()
+
+
+def test_blind_case_still_catches_a_leak_next_to_benign_vocabulary() -> None:
+    case = _real_case()
+    case.narrative = (
+        "This is a registered-agent address. Separately, the agent observed a "
+        "shared address cluster."
+    )
+    with pytest.raises(ProvenanceLeakError):
+        blind_case(case)
+
+
+def test_blind_case_allows_billing_agents_domain_vocabulary() -> None:
+    # M9 live finding: "shared phone numbers can appear in ... billing
+    # agents" was a real Skeptic benign-explanation on the second live run.
+    case = _real_case()
+    case.narrative = "Shared phone numbers can appear in billing agents or answering services."
+    blinded = blind_case(case)
+    assert "billing" in blinded.narrative.lower()
+
+
+def test_blind_case_allows_business_model_and_provider_tier_vocabulary() -> None:
+    case = _real_case()
+    case.narrative = (
+        "This is consistent with a normal business model and a standard "
+        "provider tier structure, not an anomaly."
+    )
+    blinded = blind_case(case)
+    assert "business model" in blinded.narrative.lower()
+
+
+def test_blind_case_still_catches_bare_model_and_tier_leaks() -> None:
+    case = _real_case()
+    case.narrative = "The model produced this output directly."
+    with pytest.raises(ProvenanceLeakError):
+        blind_case(case)
+    case2 = _real_case()
+    case2.narrative = "This was scored at a higher tier than usual."
+    with pytest.raises(ProvenanceLeakError):
+        blind_case(case2)

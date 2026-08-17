@@ -31,6 +31,7 @@ from specter.agents.enforcement_intel import extract
 from specter.agents.graph_investigation import investigate
 from specter.agents.skeptic import challenge
 from specter.core.contracts import CasePacket
+from specter.core.errors import SpecterError
 from specter.judge import calibration_fixtures, detection_eval, deterministic_checks, report
 from specter.judge.rubric_judge import deterministic_vs_llm_disagreement, judge_case
 from specter.settings import get_settings
@@ -38,7 +39,14 @@ from specter.settings import get_settings
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCENARIO_NPIS = {
     "S01": "9010000000", "S02": "9020000000", "S03": "9030000000", "S04": "9040000000",
-    "S05": "9050000000", "S06": "9060000000", "S07": "9070000000", "S08": "9080000000",
+    # S06: "9060000000" is _npi(6, 0), the EXCLUDED PREDECESSOR org
+    # (ingest/synthetic.py's _scenario_06, expected_signals=[]) — the
+    # provider that should exhibit phoenix_pattern is the successor,
+    # _npi(6, 1) = "9060000001" ("S06 Phoenix Successor Org", confirmed
+    # live). A prior session's "verified live" claim for this NPI table was
+    # wrong for S06 specifically; found live in M9 when the detection_eval
+    # headline showed 7/8 instead of the expected 8/8.
+    "S05": "9050000000", "S06": "9060000001", "S07": "9070000000", "S08": "9080000000",
     "S09": "9090000000", "S10": "9100000000",
 }
 _EXISTING_CASE_NPIS = ["1003001439", "1003008756"]
@@ -105,10 +113,24 @@ async def main() -> None:
             json.loads((_REPO_ROOT / "data" / "cases" / f"{npi}.json").read_text())
         )
     scenario_cases: dict[str, CasePacket] = {}
+    skipped_scenarios: dict[str, str] = {}
     for scenario_id, npi in _SCENARIO_NPIS.items():
-        case = await _build_scenario_case(scenario_id, npi, driver, evidence_dir, runtime)
+        try:
+            case = await _build_scenario_case(scenario_id, npi, driver, evidence_dir, runtime)
+        except SpecterError as exc:
+            # A live-only agent-chain failure (e.g. a genuinely ungrounded
+            # number the model produced, caught by graph_investigation's own
+            # numeric-grounding retry) must not kill the whole judge run —
+            # skip this one scenario, loudly, and keep going. Not a silent
+            # fallback: logged, printed, and carried into the report/ledger.
+            print(f"  {scenario_id} ({npi}): SKIPPED — {exc}")
+            skipped_scenarios[scenario_id] = str(exc)
+            continue
         scenario_cases[scenario_id] = case
         corpus[npi] = case
+    if skipped_scenarios:
+        print(f"\nSkipped {len(skipped_scenarios)} scenario(s) due to live agent-chain "
+              f"failures: {sorted(skipped_scenarios)} — see BUILD_MILESTONES.md debt.")
 
     print("\n=== Deterministic checks ===")
     deterministic_summary: dict[str, dict[str, int]] = {}
@@ -163,6 +185,7 @@ async def main() -> None:
         judge_verdicts=judge_verdicts,
         calibration=calibration_results,
         disagreements=disagreements,
+        skipped_scenarios=skipped_scenarios,
     )
     (_REPO_ROOT / "JudgeReport.md").write_text(text)
     print("\nJudgeReport.md written.")

@@ -149,7 +149,7 @@ def address_churn(driver: Driver, npi: str, thresholds: ScreeningThresholds) -> 
         return None
     return _signal(
         "address_churn", npi, float(len(recent)), thresholds.address_churn_count,
-        [f"graph:provider:{npi}:changed_address_to:{c}" for c in recent],
+        [f"graph:provider:{npi}"],
     )
 
 
