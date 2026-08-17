@@ -2726,14 +2726,16 @@ rationale and the generated-Cypher injection-surface acknowledgement),
 #### Action Plan
 
 **Goal.** At the end of M10: a real cold-then-warm `scripts/40_screen.py`
-run over the live cohort (target 250 providers, plan §13/§14), a real
-`scripts/50_judge.py` run producing a genuine `JudgeReport.md` (M9's own
-still-open live checkpoint — this milestone is where it actually happens),
-`README.md` documenting the architecture and the specific methodological
-choices CLAUDE.md's amendments made (Kimi removed, ZCTA not Maps, SAM.gov
-removed), `scripts/00_bootstrap.sh` for a clean-machine setup, and a `make
-demo` target that reproduces plan §14's 8-step demo script end to end. This
-is the last milestone — Phase 1 is complete when this checkpoint passes.
+run over the live cohort (target 250 providers, plan §13/§14) — the first
+time this system has been run at anything near its target scale — a
+re-confirmation that `scripts/50_judge.py` still produces a genuine
+`JudgeReport.md` (M9 already produced the first one live; this is a
+reproducibility check, not the first exercise), `README.md` documenting the
+architecture and the specific methodological choices CLAUDE.md's amendments
+made (Kimi removed, ZCTA not Maps, SAM.gov removed), `scripts/00_bootstrap.
+sh` for a clean-machine setup, and a `make demo` target that reproduces
+plan §14's 8-step demo script end to end. This is the last milestone —
+Phase 1 is complete when this checkpoint passes.
 
 **Inherited context — read every bullet before doing anything live.**
 
@@ -2752,17 +2754,17 @@ is the last milestone — Phase 1 is complete when this checkpoint passes.
    real `JudgeReport.md` exists at the repo root: `n_caught=7/8` on
    calibration (C08 consistently missed — a real finding), **8/8 scenarios
    with a Phase 1 detector detected**, real-positive precision@k=0.00 (thin
-   corpus, honestly reported). Three real live-only bugs surfaced and were
+   corpus, honestly reported). Four real live-only bugs surfaced and were
    fixed during M9's live run (see the M9 section's live-checkpoint update):
    an unresolvable `source_ids` format in `tools/signal_tools.address_churn`,
    `judge/blind.py` false-positiving on real domain vocabulary ("registered
-   agent", "billing agents"), and a table-column-misalignment bug in
-   `judge/report.py`. **Read that update before assuming the judge
-   subsystem's first live exercise is still ahead of you — it already
-   happened.** M10's own live run may still surface further live-only bugs
-   of its own (a 250-provider cohort exercises code paths the 12-case M9
-   corpus didn't) — budget time for that, but don't re-litigate what M9
-   already proved works.
+   agent", "billing agents"), a table-column-misalignment bug in
+   `judge/report.py`, and a wrong representative NPI in `scripts/50_judge.py`
+   itself. **Read that update before assuming the judge subsystem's first
+   live exercise is still ahead of you — it already happened.** M10's own
+   live run may still surface further live-only bugs of its own (a
+   250-provider cohort exercises code paths the 12-case M9 corpus didn't) —
+   budget time for that, but don't re-litigate what M9 already proved works.
 3. **`scripts/40_screen.py` has no `--cohort` flag** — plan §14's demo
    command `python scripts/40_screen.py --cohort dme_fl_tx_ca --limit 250`
    does not match the real CLI (`--limit` only; the cohort itself is fixed
@@ -2806,6 +2808,36 @@ is the last milestone — Phase 1 is complete when this checkpoint passes.
    framing, which Amendment 2 overrode before any code was written against
    it. Getting this backwards in the README would misrepresent what the
    system actually does.
+9. **`scripts/50_judge.py` does NOT scale with the screening cohort size —
+   do not widen its corpus for M10.** It grades a fixed 22-case corpus (the
+   2 pre-existing real `CasePacket`s + 10 synthetic-scenario reps) plus the
+   10 calibration fixtures, regardless of how many providers
+   `scripts/40_screen.py` screens. Running `python scripts/50_judge.py`
+   again for M10 is the same cost/shape as M9's run, not a 250x-larger one
+   — there is no requirement to judge all 250 screened providers, and doing
+   so would multiply cost for no plan-required benefit (plan §12 doesn't
+   ask for it). If you want the judge to grade some of the 250 real screened
+   cases too, that is a deliberate scope decision to make explicitly here,
+   not an assumed default.
+10. **`workflow/state.cohort_select` is already verified deterministic**
+    (`ORDER BY npi` in its own Cypher, `src/specter/workflow/state.py:30-46`)
+    — the cold and warm `--limit 250` runs will select the exact same 250
+    providers, so the L1 cache-hit demo (plan §14 steps 3-4) will show real
+    hits on the warm pass without any extra work. Don't add ordering logic
+    here; it already exists.
+11. **Rough, UNVERIFIED time budget for a cold 250-provider run**, extrapolated
+    from M9's real ledger data (`data/ledger.sqlite`, this session — not a
+    250-scale measurement, treat as a starting estimate only): per-provider
+    average latencies were `graph_investigation` T1 ≈4.7s, `enforcement_
+    intel` T1 ≈1.7s, `skeptic` T2 ≈8.2s, `case_reporter` T2 ≈6.1s (≈21s/
+    provider sequential-equivalent for the 4-stage chain M6 already proved
+    out; `entity_resolution` only fires per candidate pair, not every
+    provider, so it's not included). `workflow/screening.py`'s
+    `max_parallel_workers=4` per node folds this down, very roughly, to
+    something in the 15-30 minute range for 250 providers cold — treat this
+    as a planning number to avoid being surprised by a long run, not a
+    promise; record the real wall-clock time in this file's Result section
+    once you have it.
 
 **File manifest.**
 | Path | Action | Notes |
@@ -2813,10 +2845,10 @@ is the last milestone — Phase 1 is complete when this checkpoint passes.
 | `README.md` | CREATE | Architecture overview, the amendments' rationale (SAM.gov removal, Kimi removal + self-preference mitigation, ZCTA not Maps), routing-transparency note, Cypher-injection-surface acknowledgement, `pip show google-adk` version, real demo instructions. |
 | `scripts/00_bootstrap.sh` | CREATE | ~30 lines. `uv sync`, `docker compose up -d` + health wait, `.env` reminder, `scripts/06_bootstrap_neo4j_readonly.py`. |
 | `Makefile` | CREATE | `demo` target wrapping plan §14's 8 steps as real shell commands against the real CLI surface (see Inherited Context point 3). |
-| `scripts/40_screen.py` | EDIT (maybe) | Only if you decide to add the same live-key check `scripts/50_judge.py` has — optional, see Inherited Context point 1. |
+| `scripts/40_screen.py` | EDIT | Recommended, not optional: add the same `_confirm_azure_key_alive`-style check `scripts/50_judge.py` already has as its first step (Inherited Context point 1) before the 250-item loop starts — M9's key went dead mid-project once already, and a 250-provider run failing partway through wastes far more than a `--limit 1` sanity check costs. |
 | `config/models.yaml` | EDIT (maybe) | Only if the operator supplies real pricing — otherwise untouched, D-8 stays open. |
 | `data/cases/` | — (generated) | The 250-provider run's output — not committed as part of this Action Plan's diff; note the real count achieved in this file's Result section. |
-| `JudgeReport.md` | — (generated) | M9's still-open live checkpoint, produced this milestone. |
+| `JudgeReport.md` | — (generated) | Already exists from M9's real live checkpoint (repo root) — M10 re-runs `scripts/50_judge.py` to confirm reproducibility, not to produce it for the first time. |
 
 **Read before writing.**
 1. `phase_1_build_plan.md` §14 (demo script) and §1 (non-goals) — what the
@@ -2838,18 +2870,35 @@ is the last milestone — Phase 1 is complete when this checkpoint passes.
 
 **Checkpoint.**
 ```bash
-.venv/bin/python -c "..."          # confirm Azure key alive, fresh check (Inherited Context point 1)
+# confirm Azure key alive, fresh check — exact snippet M9 used (BUILD_MILESTONES.md
+# live-checkpoint update); adapt the /chat/completions call, don't skip straight to
+# a screening run on faith:
+.venv/bin/python -c "
+import httpx
+from specter.settings import get_settings
+s = get_settings()
+url = s.azure_api_base.rstrip('/') + '/chat/completions'
+r = httpx.post(url, headers={'api-key': s.azure_api_key.get_secret_value(), 'Content-Type': 'application/json'},
+    json={'model': 'gpt-5.4-nano', 'messages': [{'role':'user','content':'ping'}], 'max_completion_tokens': 5}, timeout=20)
+print('STATUS', r.status_code); print(r.text[:300])
+"
 bash scripts/00_bootstrap.sh       # clean-machine setup completes
 python scripts/40_screen.py --limit 250     # cold run — record real timing/cost
 python scripts/40_screen.py --limit 250     # warm run — L1 hit rate should be visibly higher
+                                             # (cohort_select is deterministic — Inherited
+                                             # Context point 10 — so this really does re-hit
+                                             # the same 250 providers, not a different sample)
 python -m specter.cli dashboard             # shows both runs' ledger rows
-python scripts/50_judge.py                  # JudgeReport.md, real n_caught/8
+python scripts/50_judge.py                  # re-confirms JudgeReport.md reproduces (already
+                                             # exists from M9 — Inherited Context point 2;
+                                             # don't widen its corpus — point 9)
 pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
 make demo                                    # reproduces the above end to end
 ```
 → `README.md` exists and accurately describes the real system, `JudgeReport.
-md` has real numbers (not the M9 401), `data/cases/` has ~250 new entries,
-`make demo` runs without manual intervention beyond `.env` being populated.
+md` still has real numbers after a fresh run, `data/cases/` has ~250 new
+entries, `make demo` runs without manual intervention beyond `.env` being
+populated.
 
 **Traps.**
 - Don't copy plan §14's `--cohort dme_fl_tx_ca` flag into the README or
@@ -2860,16 +2909,23 @@ md` has real numbers (not the M9 401), `data/cases/` has ~250 new entries,
 - A cold run against 250 real providers is a real cost line item at T1/T2
   rates — don't loop `--limit 250` speculatively "to see if it's faster
   warm"; one cold + one warm is the checkpoint, not N attempts.
-- If the Azure key is still dead, this milestone is `BLOCKED` for the same
-  reason M9 was — don't produce a README claiming a demo run that never
-  actually happened live.
+- Don't re-run `scripts/50_judge.py` in a loop "to see if the numbers are
+  stable" — one run is the checkpoint (Inherited Context point 9's cost
+  point applies here too; the rubric judge's disabled per-sample cache
+  means every run is a fresh set of real Azure calls, not a cheap replay).
+- If the Azure key turns out to be dead again when you start (it has
+  already flipped once), this milestone is `BLOCKED` for the same reason
+  M9 originally was — don't produce a README claiming a demo run that
+  never actually happened live, and don't trust this file's "the key was
+  alive as of M9" note without re-checking yourself.
 
 **Definition of done.**
 - [ ] Azure key confirmed live with a fresh check before any live step
 - [ ] Cold + warm `scripts/40_screen.py --limit 250` runs completed, real
   numbers recorded (cost, cache hit rate, priority tier distribution)
-- [ ] `scripts/50_judge.py` produces a real `JudgeReport.md` — M9's own
-  live checkpoint finally exercised
+- [ ] `scripts/50_judge.py` re-run confirms `JudgeReport.md` reproduces
+  (the report already exists from M9; this is a reproducibility check, not
+  the first live exercise)
 - [ ] `README.md`, `scripts/00_bootstrap.sh`, `Makefile` all exist and are
   accurate to the real CLI surface
 - [ ] `pytest tests/ -q`, `ruff`, `mypy` all clean
