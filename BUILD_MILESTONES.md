@@ -200,7 +200,7 @@ rule.
 
 | # | Milestone | Deliverable | Status |
 |---|---|---|---|
-| **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `TODO` — code landed 2026-08-18, offline-verified; **live checkpoint pending the Maps API key**. See the Implementation status block in §5. |
+| **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `DONE` |
 | **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `TODO` |
 | **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `TODO` |
 | **M14** | Dashboard frontend | The judge-facing UI: cohort overview, per-case drill-down, JudgeReport view | `TODO` |
@@ -211,15 +211,22 @@ rule.
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-18, planning session — Phase 1 is complete and a
-narrow Phase 2 slice (M11-M14) has been scoped but not started.** All ten
-Phase 1 milestones (M1-M10) are `DONE`. M11-M14 are `TODO`: **no Phase 2
-code has been written, no dependency added, no credential provisioned.**
-This session read the repo, verified the claims below live, wrote M11's
-Action Plan and M12-M14's scope, and added `CLAUDE.md` Amendment 4. Prior
-sessions' detailed "what changed" narratives for M1-M9 stay removed per this
-section's own instruction ("replaced, not appended") — that detail lives in
-each milestone's own entry in §5 and in `NOTES_API_DEVIATIONS.md`.
+**Last updated: 2026-08-18, end of M11 — Phase 1 complete, Phase 2 slice
+underway.** M1-M10 `DONE` (Phase 1). **M11 `DONE`** — the Physical Existence
+signal is live, classified against the real Google Maps Platform, and firing
+in real case packets. M12-M14 are `TODO`; M12's Action Plan is written.
+
+**M11 in one line:** 244 screened-cohort addresses classified live — 173
+`commercial_medical`, 46 `commercial`, 24 `residential`, 2 `mailbox_store` —
+and `physical_existence` fires for all 30 providers at an implausible-type
+address, with every citation resolving. Full detail, including two rejected
+API choices, in M11's Result block in §5.
+
+**All four credentials verified live this session** (Azure chat, Azure
+embeddings, Vertex SA, Google Maps). The Azure key died a **third** time
+mid-session and was rotated again — D-20 now records four state changes.
+**Google Places API (New) is blocked and is not needed**; legacy Places Nearby
+Search is what M11 uses and it is enabled.
 
 **The system, as it stands:**
 
@@ -343,16 +350,11 @@ these are new measurements, not restatements:**
    agents (9 agent/tier pairs — `entity_resolution` splits T1/T2 on
    escalation), `entity_resolution` T1 alone being 42,413 of them.
 
-**M11's code has since landed** (same day, at the operator's request, ahead of
-the API key) — see the Implementation status block at the top of M11 in §5 for
-exactly what is verified and what is still pending. **M11 is not `DONE`.**
-
 ### Verified green
 
 ```
-pytest tests/ -q          284 passed, 0 failed   (2026-08-18, after M11's code, all
-                           credentials live — 270 baseline + 11 maps_tools + 1 detector
-                           + 2 that had been red on the dead key)
+pytest tests/ -q          288 passed, 0 failed   (2026-08-18, end of M11 — 270 Phase 1
+                           baseline + 17 maps_tools + 1 physical_existence detector test)
 ruff check src/ tests/ scripts/     clean       (2026-08-18)
 mypy src/                           clean, 64 source files   (2026-08-18)
 ```
@@ -369,9 +371,10 @@ taken on anyone's word, including the operator's:
 
 The Azure key had gone dead a **third** time earlier in the session (4 tests
 red, confirmed by `git stash` to be unrelated to M11); the operator rotated it
-and it is alive again. **Google Places API (New) is the one thing still
-blocked** — `403 API_KEY_SERVICE_BLOCKED` — and M11 needs it. See M11's
-Implementation status block.
+and it is alive again. **Google Places API (New) returns `403
+API_KEY_SERVICE_BLOCKED` and is deliberately not used** — "Places API" and
+"Places API (New)" are separate services with separate key-restriction
+entries; the legacy Nearby Search endpoint M11 uses is enabled and works.
 
 ## 4. CARRIED DEBT
 
@@ -397,7 +400,8 @@ Implementation status block.
 | D-21 | ~~Ground-truth positives for `judge/detection_eval.py` sparser than plan §12.1 assumes~~ **CLEARED 2026-08-17 — design resolved AND empirically run.** Only 4 real (non-synthetic) providers out of 8,445 have a direct `EXCLUDED_BY` edge; `judge/detection_eval.py` reports this denominator plainly and treats per-scenario recall as the headline (plan §12.1's own instruction) via `ScenarioRecallResult.detector_exists`. **Real run, `JudgeReport.md`:** precision@10/25/50 = 0.00 (the only 2 real `CasePacket`s in the corpus have zero fired signals, so `signal_count_proxy` ranking had nothing to favor — a thin-corpus artifact, reported honestly rather than hidden), **8/8 scenarios with a Phase 1 detector detected**. | — | **cleared** |
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
 | D-23 | **`CaseScore` is never written to disk.** `workflow/screening.py:175` persists only the `CasePacket`; the `case_score` dict travels up to `scripts/40_screen.py`, gets printed, and is dropped. Recomputing it from a persisted packet is *almost* possible — `signals`, `enforcement_matches`, `legal_status_per_match` and `counter_evidence.confidence_adjustment` are all in the packet — but **`entity_adjudications` are not persisted anywhere**, and `ScoringService.score` reads them for `identity_integrity` and for the "unresolved entity-match conflict" gate reason (`workflow/state.py:128-131`, `:159-160`). A recomputation would therefore silently assume zero conflicts, i.e. fabricate a number. Found 2026-08-18 while scoping M13. | Fixing it is a ~3-line edit (persist the per-provider summary `screen_provider` already returns, which contains `case_score.model_dump(mode="json")` in full) — but it only produces data on the **next** screening run, so it is M13's call whether to pay for a fresh run or ship a dashboard whose tier chart is recomputed-and-labelled-approximate. Do not silently recompute and present it as exact. | **M13** |
-| D-24 | **No provider in the current 244-case corpus can reach `HIGH_PRIORITY`.** Measured 2026-08-18 over the persisted packets: 48 cases fire 0 signal families, 163 fire 1, 33 fire 2, **0 fire 3** — and `config/screening.yaml`'s `escalation_gate.min_independent_signal_families` is 3 against exactly 3 defined families, so the gate currently requires *all three* to fire. Zero `enforcement_matches` across all 244 as well. The real distribution is 0 HIGH / 196 STANDARD / 48 LOW. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. It is recorded here because two upcoming milestones trip over it: **M11 adds a 4th family**, which changes what "3 of N" means and must be re-measured, not assumed; and **M14 charts the tier distribution**, which will be a bar of height zero unless something changes. Neither milestone may tune `min_independent_signal_families` to manufacture a nicer-looking demo — that is gaming the gate, and it would be a lie of exactly the kind §0.1 rule 5 exists to prevent. | **M11** (re-measure), **M14** (chart honestly) |
+| D-24 | **No provider in the current 244-case corpus can reach `HIGH_PRIORITY`.** Measured 2026-08-18 over the persisted packets: 48 cases fire 0 signal families, 163 fire 1, 33 fire 2, **0 fire 3** — and `config/screening.yaml`'s `escalation_gate.min_independent_signal_families` is 3 against exactly 3 defined families, so the gate currently requires *all three* to fire. Zero `enforcement_matches` across all 244 as well. The real distribution is 0 HIGH / 196 STANDARD / 48 LOW. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. It is recorded here because two upcoming milestones trip over it: **M11 adds a 4th family**, which changes what "3 of N" means and must be re-measured, not assumed; and **M14 charts the tier distribution**, which will be a bar of height zero unless something changes. Neither milestone may tune `min_independent_signal_families` to manufacture a nicer-looking demo — that is gaming the gate, and it would be a lie of exactly the kind §0.1 rule 5 exists to prevent. | **M11 re-measured it 2026-08-18 and the answer is reassuring:** the new 4th family moved 5 of 25 cases up by one family and **no case reached 3**, so no `HIGH_PRIORITY` was manufactured. Max families fired across the whole 245-case corpus is still 2. `min_independent_signal_families` untouched. **M14 must still chart the zero bar honestly.** |
+| D-26 | **S01 (`shell-at-residential`) is still undetected even though M11 shipped the classifier it was waiting for.** Its five providers sit at fabricated streets (`ingest/synthetic.py:127`, `"{100+i} Residential Ct Apt {i}", Miami FL 33101`) which do not geocode, and synthetic addresses are deliberately never sent to Maps (hard rule 5). `classify` correctly returns `unclassified`, so nothing fires. `judge/detection_eval.py:22`'s `"S01": []` and `JudgeReport.md`'s "no (by design)" both remain accurate. | Closing it honestly means planting **real** residential addresses for S01 (still `data_origin='synthetic'` on the Provider), a ~5-line edit to `ingest/synthetic.py` plus a graph reload — which mutates the frozen synthetic corpus every prior milestone's numbers were measured against, and needs the `data_origin` labelling of a `public` Maps result reached from a `synthetic` provider thought through rather than assumed. **Operator sign-off required; not taken unilaterally in M11.** Would move `JudgeReport.md`'s headline from 8/8 to 9/9 scenarios with a detector. | **operator decision — raise before M14's demo** |
 | D-25 | **`grounded_research` still has no live consumer** — extends D-15. Confirmed 2026-08-18: the only references outside the agent module itself are in `scripts/45_smoke_grounded_research.py`. `data/evidence/` holds 7 artifacts total, so the citation trail the grounding pillar is graded on has almost no accumulated material. | D-15 has been open since M4 because no Phase 1 agent had a natural reason to call it. **The dashboard is the first natural consumer this project has ever had** — a per-case "run grounded research on this provider" endpoint would close D-15 for real. That is a scope decision for M13/M14, not an assumed default; if it is not taken, M14 must not show an empty panel captioned as if data were expected. | **DECIDED 2026-08-18: wire it.** Operator asked for live grounding explicitly. `CLAUDE.md` Amendment 4(a) amended the same day to permit one write path in the dashboard for exactly this. Vertex SA verified live — `scripts/45_smoke_grounded_research.py` returned 12 real citations — so **D-15 closes in M14**, not "unscheduled". |
 
 ---
@@ -2581,104 +2585,128 @@ milestone is `BLOCKED`, no starting M12 before M11 is `DONE`.
 
 ---
 
-### M11 — Physical Existence signal (Google Maps) · `TODO`
+### M11 — Physical Existence signal (Google Maps) · `DONE`
 
-**Implementation status (2026-08-18): code landed, live checkpoint NOT run.**
-The operator asked for the code to be written ahead of provisioning the API
-key, explicitly overriding this Action Plan's "do not write a line of
-classifier code against an unverified credential" (Step 1). Everything that
-does not need the key is done and verified offline; everything that needs it
-is still pending. **This milestone is not `DONE` and must not be marked
-`DONE` until the checkpoint below actually runs.**
+**Result (2026-08-18).** `DONE` — the full checkpoint passed live. Getting
+there took **three API choices, two of them wrong**, and the wrongness was
+only ever visible from a real call.
 
-Done and verified offline:
-- `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, the
-  `physical_existence` detector, its binding, the `graph_investigation`
-  wiring, `AddressClassification`, the settings field, the config entries,
-  `tests/test_maps_tools.py` (11 tests, fully offline).
-- `prompts/blocks/b0_tool_schemas.md` regenerated — the diff is exactly the
-  one new tool schema, `+7` lines, nothing else moved.
-- `ruff check src/ tests/ scripts/` clean; `mypy src/` clean across **64**
-  source files (was 63).
-- `python scripts/60_classify_addresses.py --limit 2` fails loudly with the
-  right message when no key is set — verified by running it.
+**Credentials, all verified live by this session, none taken on trust:**
+Azure chat `200`; Azure embeddings OK (3072 dims, via the project's own
+`embed_texts`); Vertex SA live (`scripts/45_smoke_grounded_research.py`
+returned a real narrative with **12 citations**); Maps key `200`. The Azure key
+had died a **third** time earlier in the session — 4 tests red, confirmed by
+`git stash` to be unrelated to M11 — and the operator rotated it.
 
-Still pending, all of it requiring the real key:
-- Steps 1 and 2 (confirm the credential mechanism; empirically pick the API).
-- Every live checkpoint command, the real `location_type` distribution, the
-  before/after tier distribution, `NOTES_API_DEVIATIONS.md` D25's real
-  response shape, and the S01 decision (Step 8).
+**The API journey, which is the real content of this milestone:**
 
-**UPDATE, same day — the operator provisioned the Maps key and rotated Azure,
-so Step 2 finally ran. It overturned the API choice.**
+1. **Address Validation alone — rejected on evidence.** Chosen first on
+   reasoning alone (the key did not exist yet). Measured across nine real
+   addresses, it cannot do the job: `uspsData.dpvCmra` — the USPS Commercial
+   Mail Receiving Agency flag the whole design rested on — **is never
+   returned** (`dpvFootnote` is `"A1"`, ZIP+4 matched but delivery point
+   unconfirmed, everywhere); `metadata` is frequently `{}`, including for a
+   real suburban house; and where populated it reports `residential: false,
+   business: true` for a **Manhattan apartment**. A UPS Store and a hospital
+   classified identically.
+2. **Places API (New) — blocked, and not needed.** `403
+   API_KEY_SERVICE_BLOCKED` even after the operator added Places to the key —
+   because "Places API" and "Places API (New)" are **separate services**
+   (`places-backend.googleapis.com` vs `places.googleapis.com`) with separate
+   entries in a key's API restriction. Diagnosing that is what surfaced the
+   working path.
+3. **What shipped: Address Validation as a geocoder + legacy Places Nearby
+   Search.** Two calls per address, one stored artifact. This is the
+   "facility-density comparison" `phase_1_build_plan.md` Amendment 3 named by
+   hand, and it discriminates for real:
 
-All credentials re-verified live 2026-08-18, by this session, not taken on
-trust: **Azure chat 200**, **Azure embeddings OK (3072 dims, via the project's
-own `embed_texts`)**, **Vertex SA live** (`scripts/45_smoke_grounded_research.
-py` returned a real narrative with **12 citations**), **Maps key live (200)**.
-Suite is back to **284 passed, 0 failed** — the 4 red tests were the dead
-Azure key, exactly as diagnosed.
+   | Address | establishments within 40-50m |
+   |---|---|
+   | suburban house, Burbank CA | **0** |
+   | commercial strip, Berkeley CA | 20, none medical |
+   | Jackson Memorial campus, Miami FL | 20, most typed `doctor`/`health` |
+   | real cohort address, La Jolla CA | 18, all 18 medical |
 
-**But the Address Validation API does not deliver the discriminator.**
-Measured across nine real addresses (full table in `NOTES_API_DEVIATIONS.md`
-D25):
-- `uspsData.dpvCmra` — the module's strongest evidence — **is never returned**.
-  The block holds only `cassProcessed`, `dpvFootnote`, `standardizedAddress`,
-  sometimes `carrierRoute`. `dpvFootnote` is `"A1"` (ZIP+4 matched, delivery
-  point *not* confirmed) on every address tried, so full DPV never arrives.
-- `metadata` is frequently `{}` — including for a genuine suburban house.
-- Where populated, `residential: false, business: true` even for a Manhattan
-  apartment.
+   The load-bearing detail: Nearby Search returns `route`/`locality`/
+   `political` entries for the surrounding street alongside real POIs.
+   Filtering on `"establishment" in types` is what makes "zero establishments"
+   mean "residence" instead of "everything looks occupied".
 
-Net: a UPS Store and a hospital both classify `commercial`; a house classifies
-`unclassified`. The precise inverse of what the signal needs.
-`tools/maps_tools.py` is flagged superseded at the top of its own docstring.
+**Real classification run — 244 screened-cohort addresses, live:**
 
-**M11 is now blocked on one operator action.** The replacement is the **Places
-API (New)** `searchText`, whose `types`/`primaryType` genuinely separate
-`post_office`/shipping stores from `hospital`/`doctor`/`pharmacy`, and where
-"no establishment at this address" is itself reasonable residential evidence.
-It also restores `commercial_medical`, dropped earlier because Address
-Validation had no category data. It currently returns:
+| `location_type` | count |
+|---|---|
+| `commercial_medical` | 173 |
+| `commercial` | 46 |
+| `residential` | 24 |
+| `mailbox_store` | 2 |
+
+**30 providers sit at an implausible-type address. `physical_existence` fires
+for 30/30, and every one of their `source_ids` resolves** — `all_resolved=True`,
+2/2 citations each (`graph:address:<key>` + the stored Maps artifact).
+
+**Real screening run**, `python scripts/40_screen.py --limit 25`:
+`cohort_size=25 screened=24 rejected=1` (the rejection is a genuine hard-rule-1
+numeric-grounding catch on `'1800'`, not a bug). `physical_existence` appears
+in **7 of 24** case packets' fired families.
+
+**D-24 measured before and after, as required — and the answer is
+reassuring:**
 
 ```
-403 PERMISSION_DENIED  reason: API_KEY_SERVICE_BLOCKED
-    service: places.googleapis.com   consumer: projects/893764446666
+25-provider re-run, 3 families (pre-M11):  {0 fam: 10, 1 fam: 15}
+25-provider re-run, 4 families (with M11): {0 fam:  8, 1 fam: 12, 2 fam: 5}
+whole 245-case corpus, 4 families:         {0 fam: 47, 1 fam: 160, 2 fam: 38}
 ```
 
-i.e. the API is not enabled on the project and/or the key's restriction
-excludes it. **Do not rewrite `classify` against Places until it is enabled and
-real responses are captured** — writing a classifier against a
-documented-but-unobserved shape is what produced this entire update.
+The new family moved 5 of 25 cases up by one family. **No case reached 3, so
+no `HIGH_PRIORITY` was manufactured** — max families fired anywhere in the
+corpus is still 2. `min_independent_signal_families` was **not** touched.
 
-**Deviations from the Action Plan below, all deliberate:**
-- **The API was chosen without Step 2's empirical comparison** — that needs
-  the key. **Address Validation API** was picked on the reasoning that it is
-  the only candidate returning a *direct* residential/business/CMRA
-  discriminator (`uspsData.dpvCmra` is USPS's own Commercial Mail Receiving
-  Agency flag) rather than a business-category list to infer from. **The
-  response field paths are `UNVERIFIED:` — written from documentation, never
-  observed.** They are named once, in `maps_tools._FIELD_PATHS`, so a wrong
-  guess is a small edit; `tests/test_maps_tools.py`'s fixtures are what will
-  fail if the shape differs, which is the point of them.
-- **No `location_type_map` in `config/screening.yaml`.** The Action Plan
-  assumed a Places-style type vocabulary to map. Address Validation returns
-  *booleans*, so there is no table to configure — the precedence
-  (CMRA → poBox → residential → business) lives in `classify` as eight
-  documented lines and is unit-tested. What genuinely varies —
-  `physical_existence_implausible_types` and the threshold — **is** in config.
-- **`commercial_medical` dropped from `LocationType`.** Address Validation
-  carries no business-category data, so it could never be emitted. Telling a
-  medical office from a nail salon would need the Places API, and the signal
-  only gates on the implausible types. Five types became four plus
-  `unclassified`, with `po_box` added.
-- **The new thresholds live under `thresholds:`**, not a separate config
-  block, so they reach every detector through the one `load_thresholds` path
-  already plumbed everywhere. Both are defaulted on `ScreeningThresholds` so
-  an older `screening.yaml` still parses.
-- **`--screened-only` flag added** to the classifier: classifies just the
-  addresses of providers with a persisted `CasePacket` (244 calls), which is
-  the set M14 renders and the cheapest path to a complete demo.
+**The honest limitation, carried on every signal rather than hidden:**
+establishment density is a proxy for land use and it is weakest exactly where
+population density is highest. A Manhattan apartment sits in a dense
+commercial block, returns ~20 establishments, and classifies `commercial` — a
+false negative. Every classification therefore carries
+`known_limitations: ["places_density_heuristic", "not_field_verified",
+"unreliable_in_dense_urban_cores"]`, plus `type:<location_type>` on the
+signal. One observed likely false positive worth knowing about: `10000 BAY
+PINES BLVD` (a VA medical campus) returned 0 establishments and classified
+`residential` — the geocode landed somewhere unoccupied. That is exactly the
+kind of thing the Skeptic exists to challenge, and it is why this signal is
+one of four families rather than a verdict.
+
+**S01 remains undetected, as predicted.** Its five providers sit at fabricated
+streets (`ingest/synthetic.py:127`) which do not geocode, and synthetic
+addresses are never sent to Maps anyway (hard rule 5). `classify` returns
+`unclassified` for a non-geocoding address, so nothing fires. Step 8's option
+— planting real residential addresses for S01 — was **not** taken; it needs
+operator sign-off and mutates the frozen synthetic corpus. Carried to §4 as
+**D-26**.
+
+`pytest tests/ -q` → **288 passed**. `ruff check src/ tests/ scripts/` and
+`mypy src/` clean across 64 source files. B0 regenerated and current
+(`changed=False` on re-run).
+
+**Deviations from the Action Plan, all deliberate:**
+- **The API is a pair, not one call.** The plan assumed a single classifying
+  API existed. None does — the working design geocodes with one and counts
+  establishments with another, and stores both halves in one artifact.
+- **No `location_type_map` in config.** The plan assumed a Google-type →
+  `location_type` table. The real discriminator is a *count* plus two small
+  lists, so config holds `physical_existence_radius_m`,
+  `_medical_place_types`, `_mail_service_patterns`, `_implausible_types` and
+  `_min_colocated`, and the precedence lives in `classify` as documented,
+  unit-tested code.
+- **`po_box` dropped, `commercial_medical` restored.** The former was an
+  Address-Validation-only concept; the latter came back once Places supplied
+  category data, and it matters — it is what stops the signal firing on a DME
+  supplier legitimately sited in a medical office building (171 of 244).
+- **`AddressClassification` gained `establishment_count` /
+  `medical_establishment_count`**, so a reviewer can check a verdict against
+  the input it was derived from.
+- The new thresholds live under `thresholds:` so they reach detectors through
+  the one `load_thresholds` path already plumbed everywhere.
 
 **Scope.** The signal `phase_1_build_plan.md` Amendment 3 explicitly deferred
 to Phase 2 — "address-type classification (residential vs. commercial vs.
@@ -3247,7 +3275,161 @@ config, dashboard, or README — as a probability of fraud.
 
 #### Action Plan
 
-(not yet written)
+**Goal.** At the end of M12, `tools/ml_tools.py` exposes a trained,
+deterministic-at-inference anomaly scorer over the structural features this
+system already computes, callable exactly like `signal_tools`'s detectors,
+with a persisted versioned model artifact and a `source_id` that resolves
+through `validate_citations`. It gives the M14 dashboard a per-provider number
+that is neither a graph count nor an LLM opinion, and it demonstrates the
+"ML as a tool, not as judgment" reading of hard rule 1 that `CLAUDE.md`
+Amendment 4(b) authorizes.
+
+**A scope note worth reading before you start.** If the demo deadline is
+tight, **M13/M14 are worth more than M12**. The dashboard is what the judges
+actually see; the ML score is one panel inside it. M12 is genuinely deferrable
+— nothing in M13/M14 breaks without it, they just render one fewer field. If
+you are behind, say so here and skip to M13 rather than half-doing both. That
+is a scope decision to make explicitly, not by drift.
+
+**Inherited context.**
+
+1. **M11 is `DONE` and it changed the feature surface.** There are now **ten**
+   detectors, not nine (`physical_existence`), and `Address` nodes carry
+   `location_type`, `establishment_count` and `medical_establishment_count`
+   for 245 real addresses. Those last two are **real numeric features
+   available with no extra API call** — a useful addition to the matrix, and
+   the only ones sourced from outside the graph.
+2. **The detectors throw their numbers away.** Every one returns `None` below
+   threshold (e.g. `signal_tools.py:59`), so they cannot be reused as-is for a
+   feature vector. Verified: a permissive `ScreeningThresholds` recovers the
+   real value for **7 of 10**, but **not** `exclusion_proximity` (its
+   `max_hops` is interpolated into the Cypher at line 164, so 0 yields an
+   invalid `[*1..0]`), **not** `phoenix_pattern` (its value is only defined
+   when the pattern matches), and `physical_existence` is categorical.
+   **Write a dedicated feature-extraction query instead of fighting the
+   threshold-zeroing trick** — one Cypher pass returning raw
+   degrees/counts/distances is simpler than ten function calls and is what you
+   want for a 6,970-row matrix anyway.
+3. **The labels are thin and synthetic-dominated. This is the milestone's
+   integrity problem.** Live counts, re-verify them: **4** real and **4**
+   synthetic providers carry a direct `EXCLUDED_BY` edge, out of 8,445 real /
+   186 synthetic. The usable positives are the **36 scenario providers
+   (S01-S10)** against **150 synthetic controls**; the 6,970-provider real
+   cohort is effectively unlabelled. **Train unsupervised.** `IsolationForest`
+   with a fixed `random_state`, fit on the real cohort's feature matrix, using
+   the 36/150 synthetic set **only** as a held-out sanity evaluation — "does
+   the score rank planted scenarios above controls?" — reported with the
+   candour `judge/detection_eval.py` already applies to `precision@k = 0.00`.
+   A supervised model on 36 synthetic positives would be a model of
+   `ingest/synthetic.py`, not of fraud; if you add one anyway, label it that
+   way in its own output.
+4. **D-17 still stands.** Synthetic scenario providers have no `HAS_TAXONOMY`
+   edge, so `cohort_select` never returns them. Query by `scenario_id`
+   directly for the evaluation set, as M3/M5/M9's smoke scripts already do.
+5. **`scikit-learn` is not installed, and neither are `numpy` or `scipy`** —
+   verified 2026-08-18. `uv add scikit-learn` pulls 3-4 packages. `mypy` runs
+   **strict** and sklearn ships no complete stubs, so expect an override
+   stanza in `pyproject.toml` next to the existing `usaddress`/`igraph` ones.
+   Record the dependency the way `fastexcel` was (D-19's precedent).
+6. **Polars, not Pandas** (CLAUDE.md). Build the matrix in Polars and hand
+   sklearn a numpy array at the boundary.
+
+**File manifest.**
+| Path | Action | Notes |
+|---|---|---|
+| `pyproject.toml` | EDIT | `uv add scikit-learn`; mypy override for `sklearn.*`. Commit `uv.lock`. |
+| `src/specter/tools/ml_tools.py` | CREATE | ~150 lines. `extract_features`, `train`, `score_provider`. `score_provider` loads the persisted model and is pure given it. |
+| `src/specter/core/contracts.py` | EDIT | `ProviderFeatures`, `AnomalyScore` (carrying `model_version`, `training_set_description`, `known_limitations`). |
+| `config/screening.yaml` | EDIT | `ml:` block — feature list **and ordering**, `random_state`, `n_estimators`, `contamination`. No hyperparameter in code. |
+| `scripts/70_train_anomaly_model.py` | CREATE | Offline trainer. Writes `data/models/anomaly_<version>.joblib` + a JSON sidecar recording feature order, row count, training date. |
+| `data/models/` | CREATE | New directory. Decide and state whether it is committed or gitignored — it is a build artifact, but a demo needs it present. |
+| `tests/test_ml_tools.py` | CREATE | Cases under Step 5. Offline, fixed seed. |
+
+**Read before writing.**
+1. `src/specter/tools/signal_tools.py` — all ten detectors, for the exact
+   Cypher each uses. Your feature query is a union of these.
+2. `src/specter/judge/detection_eval.py` (whole file, ~124 lines) — the house
+   style for reporting a metric honestly against a thin denominator. Your
+   evaluation section should read like this one.
+3. `src/specter/graph/communities.py` — the existing fixed-`random_state`
+   precedent for a reproducible unsupervised algorithm.
+4. `config/screening.yaml` — the `thresholds:`/`signal_families:` pattern your
+   `ml:` block should match.
+5. `CLAUDE.md` Amendment 4(b) — the five requirements any shipped model must
+   meet. That is acceptance criteria, not background.
+
+**Steps.**
+
+1. `uv add scikit-learn`; add the `mypy` override; confirm
+   `.venv/bin/python -c "import sklearn"` is silent.
+2. `extract_features(driver, npis) -> pl.DataFrame` — one Cypher pass, columns
+   in the exact order `config/screening.yaml` pins. Include the M11 columns
+   (`establishment_count`, `medical_establishment_count`) and `location_type`
+   as an ordinal or one-hot. Missing values are `0.0` with an explicit comment
+   saying so — never silently imputed to a mean.
+3. `scripts/70_train_anomaly_model.py` — fit `IsolationForest` on the real
+   cohort only, fixed `random_state`, persist with `joblib` plus the JSON
+   sidecar. Print the row count and feature order it trained on.
+4. Evaluate on the held-out synthetic set: rank all 186 synthetic providers by
+   anomaly score and report where the 36 scenario providers land versus the
+   150 controls. **Report the number you get, not the number you wanted.** If
+   it does not separate them, that is a finding worth more than a fudged
+   threshold — say so and keep the model out of the escalation gate.
+5. `tests/test_ml_tools.py`: (a) `score_provider` is deterministic — same
+   features and model, byte-identical output twice; (b) feature ordering is
+   read from config and a reordered config changes the vector (guards against
+   silent column drift); (c) a missing model file raises rather than returning
+   0.0; (d) `AnomalyScore` always carries a non-empty
+   `training_set_description`.
+6. **Decide where the output goes** (scope paragraph's point 3). Recommended:
+   **dashboard-only, read by M13's API.** It keeps the score out of the
+   escalation gate — which matters, because a score trained on unlabelled data
+   has no business moving a provider's `priority_tier` — and it avoids
+   re-opening the B0/cache-boundary work M11 just did. Justify whichever you
+   pick.
+
+**Checkpoint.**
+```bash
+python scripts/70_train_anomaly_model.py
+# → prints trained_rows=<n> features=[...] model_version=<v>, writes data/models/
+python -c "from specter.tools.ml_tools import score_provider; print(score_provider('1003050550'))"
+# → an AnomalyScore with model_version, training_set_description, known_limitations
+pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+```
+→ 288 + your new tests passing. Record the real separation between the 36
+scenario providers and the 150 controls in this file's Result section.
+
+**Traps.**
+- **Do not train on the labels.** 36 synthetic positives produce a model that
+  has memorised `ingest/synthetic.py`. Fit unsupervised on the real cohort;
+  the synthetic set is the *test*, never the *fit*.
+- **Do not let the score into `ScoringService`** without a deliberate decision
+  and a written justification. Hard rule 8 keeps scoring deterministic; an
+  unsupervised score is deterministic but not *validated*, which is a
+  different thing.
+- **Never call it a fraud probability.** `IsolationForest.score_samples`
+  returns an unbounded anomaly score. Do not min-max it into something that
+  looks like a probability. Plan §16 and Amendment 4(b) both forbid it.
+- **Feature ordering silently drifts.** A model trained on one column order and
+  scored on another produces confident nonsense with no error. Pin the order in
+  config, record it in the sidecar, assert it matches at load time.
+- **`uv add scikit-learn` writes `uv.lock`** — commit it with the milestone.
+
+**Definition of done.**
+- [ ] `scikit-learn` added and recorded as a deliberate dependency; `uv.lock`
+      committed; `mypy` override added if needed
+- [ ] Feature list and ordering, and every hyperparameter, live in
+      `config/screening.yaml` — none in `.py`
+- [ ] Model trained unsupervised on the real cohort with a fixed
+      `random_state`; persisted with a version and a feature-order sidecar
+- [ ] Held-out synthetic evaluation run and its **real** result reported,
+      favourable or not
+- [ ] `AnomalyScore` carries `model_version`, `training_set_description` and
+      `known_limitations`; never presented as a fraud probability
+- [ ] `score_provider` is deterministic, unit-tested for it
+- [ ] Where the output flows is decided explicitly and justified
+- [ ] `pytest`, `ruff`, `mypy` all clean
+- [ ] §2 → `DONE`; §3 replaced; §4 updated; M13's Action Plan written
 
 ---
 

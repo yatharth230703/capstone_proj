@@ -29,7 +29,23 @@ thresholds:
   # implausible-type address is worth surfacing"; raise it to only surface
   # clusters. `implausible_types` must be values of `contracts.LocationType`.
   physical_existence_min_colocated: 1.0
-  physical_existence_implausible_types: ["residential", "mailbox_store", "po_box"]
+  physical_existence_implausible_types: ["residential", "mailbox_store"]
+  # Nearby-Search radius. 50m keeps the result to the building and its
+  # immediate neighbours; widening it makes every suburban house look
+  # commercial. Measured 2026-08-18: a real suburban house returns 0
+  # establishments at 40m, a medical campus returns 18.
+  physical_existence_radius_m: 50
+  # Google place types that mark an establishment as medical. A DME supplier
+  # in a medical office building is the ordinary, innocent configuration —
+  # this is what stops it firing on one.
+  physical_existence_medical_place_types:
+    ["doctor", "health", "hospital", "pharmacy", "dentist", "physiotherapist"]
+  # Mailbox-store detection needs BOTH the `post_office` place type and these
+  # name patterns: measured live, a UPS Authorized Shipping Outlet carries
+  # only ['establishment', 'point_of_interest'] and a PostNet only adds
+  # 'store', so the type alone misses most of them.
+  physical_existence_mail_service_patterns:
+    ["ups store", "postnet", "mail box", "mailbox", "pak mail", "postal annex"]
   # B2 (plan §7.1) is above the cache boundary and shared by every agent —
   # all 255 communities would add ~20k tokens to every single call, so only
   # the top N by member_count are rendered (graph/summaries.py render_b2).

@@ -36,6 +36,7 @@ from neo4j import Driver, GraphDatabase
 from specter.settings import Settings, get_settings
 from specter.tools.evidence_tools import store_artifact
 from specter.tools.maps_tools import build_address_line, classify, fetch_address_record
+from specter.tools.signal_tools import load_thresholds
 
 logger = structlog.get_logger(__name__)
 
@@ -63,6 +64,8 @@ MATCH (a:Address {normalized_key: $normalized_key})
 SET a.location_type = $location_type,
     a.location_type_source_id = $artifact_id,
     a.location_type_reason = $reason,
+    a.establishment_count = $establishment_count,
+    a.medical_establishment_count = $medical_establishment_count,
     a.classified_at = $classified_at
 """
 
@@ -81,8 +84,10 @@ def _confirm_maps_key_alive(settings: Settings) -> str:
             "Address Validation API on the project."
         )
     key = settings.google_maps_api_key.get_secret_value()
-    record = fetch_address_record("1600 Amphitheatre Parkway, Mountain View, CA 94043", key)
-    if "result" not in record:
+    record = fetch_address_record(
+        "1600 Amphitheatre Parkway, Mountain View, CA 94043", key, 50
+    )
+    if "result" not in record["address_validation"]:
         raise RuntimeError(
             f"Maps key check returned 200 but no `result` block: {json.dumps(record)[:300]} — "
             "aborting before the batch starts, not partway through it."
@@ -126,6 +131,7 @@ def main(limit: int, screened_only: bool) -> None:
     api_key = _confirm_maps_key_alive(settings)
     print("Maps key OK.")
 
+    thresholds = load_thresholds(_REPO_ROOT / "config" / "screening.yaml")
     driver = GraphDatabase.driver(
         settings.neo4j_uri,
         auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value()),
@@ -142,7 +148,9 @@ def main(limit: int, screened_only: bool) -> None:
                 row["city"], row["state"], row["zip5"],
             )
             try:
-                record = fetch_address_record(address_line, api_key)
+                record = fetch_address_record(
+                    address_line, api_key, thresholds.physical_existence_radius_m
+                )
             except httpx.HTTPError as exc:
                 # Fail loudly (hard rule 7). A transport failure mid-batch must
                 # stop the run — everything classified so far is already
@@ -165,9 +173,9 @@ def main(limit: int, screened_only: bool) -> None:
                 content_type="application/json",
                 source_id=f"maps:{row['normalized_key']}",
                 evidence_dir=_EVIDENCE_DIR,
-                extraction_method="google_address_validation",
+                extraction_method="google_maps_validation_plus_nearby",
             )
-            classification = classify(str(row["normalized_key"]), record)
+            classification = classify(str(row["normalized_key"]), record, thresholds)
 
             with driver.session() as session:
                 session.run(
@@ -176,6 +184,8 @@ def main(limit: int, screened_only: bool) -> None:
                     location_type=classification.location_type,
                     artifact_id=artifact.artifact_id,
                     reason=classification.classification_reason,
+                    establishment_count=classification.establishment_count,
+                    medical_establishment_count=classification.medical_establishment_count,
                     classified_at=datetime.now(UTC).isoformat(),
                 )
             counts[classification.location_type] = (
@@ -186,6 +196,8 @@ def main(limit: int, screened_only: bool) -> None:
                 normalized_key=row["normalized_key"],
                 location_type=classification.location_type,
                 reason=classification.classification_reason,
+                establishment_count=classification.establishment_count,
+                medical_establishment_count=classification.medical_establishment_count,
             )
 
         print(f"classified={sum(counts.values())}")

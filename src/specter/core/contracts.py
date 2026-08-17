@@ -279,12 +279,19 @@ class ScreeningThresholds(SpecterModel):
     # everywhere. Defaulted so an older `config/screening.yaml` still parses.
     physical_existence_min_colocated: float = 1.0
     physical_existence_implausible_types: list[str] = Field(
-        default_factory=lambda: ["residential", "mailbox_store", "po_box"]
+        default_factory=lambda: ["residential", "mailbox_store"]
+    )
+    physical_existence_radius_m: int = 50
+    physical_existence_medical_place_types: list[str] = Field(
+        default_factory=lambda: ["doctor", "health", "hospital", "pharmacy", "dentist"]
+    )
+    physical_existence_mail_service_patterns: list[str] = Field(
+        default_factory=lambda: ["ups store", "postnet", "mail box", "mailbox"]
     )
 
 
 LocationType = Literal[
-    "residential", "mailbox_store", "po_box", "commercial", "unclassified"
+    "residential", "mailbox_store", "commercial_medical", "commercial", "unclassified"
 ]
 
 
@@ -304,6 +311,11 @@ class AddressClassification(SpecterModel):
     normalized_key: str
     location_type: LocationType
     matched_formatted_address: str | None
+    # The facility-density numbers Amendment 3 named. Counted from a real API
+    # response, never estimated — these are what the classification is derived
+    # from, kept so a reviewer can check the verdict against its own input.
+    establishment_count: int = Field(ge=0)
+    medical_establishment_count: int = Field(ge=0)
     classification_reason: str
     known_limitations: list[str]
 
