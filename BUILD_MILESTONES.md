@@ -50,9 +50,16 @@ you need is in this file.
 - **Verify, don't assume.** Every claim in an Action Plan was written by a
   previous session that could have been wrong. If reality contradicts the
   Action Plan, trust reality, fix the plan, and say so in Notes.
-- **No scope creep.** `phase_1_build_plan.md` §1 lists explicit non-goals: no
-  ML models, no billing anomaly scores, no web frontend, no geospatial
-  land-use classification. If a task feels like Phase 2, stop and ask.
+- **No scope creep — but read `CLAUDE.md` Amendment 4 first.**
+  `phase_1_build_plan.md` §1 lists explicit non-goals: no ML models, no
+  billing anomaly scores, no web frontend, no geospatial land-use
+  classification. **Three of those are narrowly reversed for M11-M14 only**,
+  by `CLAUDE.md` Amendment 4 — Maps-based address-type classification (M11),
+  classical ML *as a deterministic tool* (M12), and a judge-facing dashboard
+  (M13/M14). Nothing else in §1 is reopened: still no billing anomaly
+  scores, no clinical-note NLP, no document forgery detection, no calibrated
+  fraud probabilities. If a task feels like Phase 2 and Amendment 4 does not
+  name it, stop and ask.
 
 ### 0.3 Session start ritual (~2 minutes, do it every time)
 
@@ -186,18 +193,33 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 | **M9** | Judge subsystem | `judge/` — detection eval, deterministic checks, rubric judge, report | `DONE` |
 | **M10** | Full run & docs | 250-provider run, `README.md`, demo script | `DONE` |
 
+**Phase 1 ends at M10.** M11-M14 are a deliberately narrow Phase 2 slice,
+authorized by `CLAUDE.md` **Amendment 4** and scoped for a judge-facing demo —
+not "all of Phase 2". Same discipline, same file, same one-milestone-per-session
+rule.
+
+| # | Milestone | Deliverable | Status |
+|---|---|---|---|
+| **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `TODO` |
+| **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `TODO` |
+| **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `TODO` |
+| **M14** | Dashboard frontend | The judge-facing UI: cohort overview, per-case drill-down, JudgeReport view | `TODO` |
+
 ---
 
 ## 3. CURRENT STATE
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-17, end of M10 — Phase 1 is complete.** All ten
-milestones (M1-M10) are `DONE`. This is the terminal snapshot; prior
-sessions' detailed "what changed" narratives for M1-M9 have been removed
-from this section per its own instruction ("replaced, not appended") — that
-detail still lives in each milestone's own entry in §5 and in
-`NOTES_API_DEVIATIONS.md`, which is the durable record.
+**Last updated: 2026-08-18, planning session — Phase 1 is complete and a
+narrow Phase 2 slice (M11-M14) has been scoped but not started.** All ten
+Phase 1 milestones (M1-M10) are `DONE`. M11-M14 are `TODO`: **no Phase 2
+code has been written, no dependency added, no credential provisioned.**
+This session read the repo, verified the claims below live, wrote M11's
+Action Plan and M12-M14's scope, and added `CLAUDE.md` Amendment 4. Prior
+sessions' detailed "what changed" narratives for M1-M9 stay removed per this
+section's own instruction ("replaced, not appended") — that detail lives in
+each milestone's own entry in §5 and in `NOTES_API_DEVIATIONS.md`.
 
 **The system, as it stands:**
 
@@ -269,14 +291,65 @@ any future session, never trust a prior note's timestamp.**
 - `python -m specter.cli dashboard`: overall cache hit rate 83% across the
   full accumulated ledger; `cost_usd` correctly `-` throughout (D-8 open).
 
+**Facts verified live this session (2026-08-18) that M11-M14 depend on —
+these are new measurements, not restatements:**
+
+1. **No Maps credential exists anywhere in the repo.** `grep -rn "MAPS\|maps"`
+   over `.env.example`, `src/specter/settings.py` and `config/` returns
+   nothing. `.env` has no Maps line either. M11 is adding new config, not
+   renaming existing config.
+2. **`fastapi==0.141.1`, `uvicorn==0.52.1`, `jinja2==3.1.6` are all already
+   installed**, transitively via `google-adk[mcp]`. M13/M14 need **no new web
+   dependency**. `scikit-learn` is **not** installed, and neither is `numpy`
+   or `scipy` — M12's `uv add scikit-learn` pulls in 3-4 transitive packages,
+   not one.
+3. **`CaseScore` is never persisted.** `workflow/screening.py:175` writes only
+   `case_packet.model_dump_json()` to `data/cases/<npi>.json`; the
+   `case_score` dict is returned up to `scripts/40_screen.py`, printed, and
+   discarded. Anything wanting `priority_tier` from disk today has to
+   recompute it — and cannot do so exactly (see debt **D-23**).
+4. **The persisted 244-case corpus, measured directly:** 196/244 have ≥1
+   fired signal; signal-type counts are `exclusion_proximity` 122,
+   `officer_degree` 103, `geographic_spread` 73, `phone_degree` 9,
+   `address_degree` 3, `enumeration_burst` 1; zero cases have any
+   `enforcement_matches`; `confidence_adjustment` is non-zero on all 196
+   (range -0.35 to 0.0); narrative length 947/2075/3481 chars (min/median/max).
+5. **Signal-family histogram over those 244 packets: 48 cases fire 0
+   families, 163 fire 1, 33 fire 2, and *zero* fire 3.** The escalation gate
+   requires `min_independent_signal_families: 3`, so **no provider in the
+   current corpus can reach `HIGH_PRIORITY`** — the real tier distribution is
+   0 HIGH / 196 STANDARD / 48 LOW. This is a genuine property of the system
+   today, not a bug, and both M11 (which adds a family) and M14 (which charts
+   the distribution) have to deal with it honestly. See debt **D-24**.
+6. **Live graph label counts for M12:** 8,631 `Provider` total — 8,445
+   `data_origin='public'`, 186 `synthetic`. Providers with a direct
+   `EXCLUDED_BY` edge: **4 real, 4 synthetic**. 36 scenario providers
+   (S01:5 S02:5 S03:8 S04:4 S05:2 S06:2 S07:1 S08:1 S09:2 S10:6) + 150
+   synthetic controls. Cohort (`taxonomy 332` × FL/TX/CA) = **6,970**
+   providers.
+7. **Address coverage for M11:** 7,848 `Address` nodes, 7,791 with
+   `street_number`+`street_name`+`zip5` all present. The 244 screened
+   providers map **1:1 onto 244 distinct Address nodes** (2 of them
+   street-incomplete). Synthetic scenario providers occupy 23 distinct
+   addresses.
+8. **`grounded_research` still has no consumer** outside
+   `scripts/45_smoke_grounded_research.py` (debt **D-15**), and
+   `data/evidence/` holds **7** artifacts total. A dashboard panel promising
+   "real web-search citations" has almost nothing to render unless M13/M14
+   deliberately wires one. See debt **D-25**.
+9. **`data/cases/`, `data/evidence/` and `data/ledger.sqlite` are all
+   gitignored.** The dashboard's entire data layer is machine-local run
+   output. `data/ledger.sqlite` currently holds **48,095** rows across 8
+   agents (9 agent/tier pairs — `entity_resolution` splits T1/T2 on
+   escalation), `entity_resolution` T1 alone being 42,413 of them.
+
 ### Verified green
 
 ```
-pytest tests/ -q          270 passed, 0 failed   (2026-08-17, M10 end — 268 M9 baseline
-                           + 2 new tests for _invoke_with_retry's recovery/exhaustion
-                           behavior, offline/mocked)
-ruff check src/ tests/ scripts/     clean
-mypy src/                           clean, 63 source files
+pytest tests/ -q          270 passed, 0 failed   (re-run 2026-08-18 at the start of
+                           this planning session — unchanged from M10's baseline)
+ruff check src/ tests/ scripts/     clean       (2026-08-18)
+mypy src/                           clean, 63 source files   (2026-08-18)
 ```
 
 ## 4. CARRIED DEBT
@@ -302,6 +375,9 @@ mypy src/                           clean, 63 source files
 | D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. | — | **cleared, but re-verify before every future live run — this is not hypothetical, it has happened twice** |
 | D-21 | ~~Ground-truth positives for `judge/detection_eval.py` sparser than plan §12.1 assumes~~ **CLEARED 2026-08-17 — design resolved AND empirically run.** Only 4 real (non-synthetic) providers out of 8,445 have a direct `EXCLUDED_BY` edge; `judge/detection_eval.py` reports this denominator plainly and treats per-scenario recall as the headline (plan §12.1's own instruction) via `ScenarioRecallResult.detector_exists`. **Real run, `JudgeReport.md`:** precision@10/25/50 = 0.00 (the only 2 real `CasePacket`s in the corpus have zero fired signals, so `signal_count_proxy` ranking had nothing to favor — a thin-corpus artifact, reported honestly rather than hidden), **8/8 scenarios with a Phase 1 detector detected**. | — | **cleared** |
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
+| D-23 | **`CaseScore` is never written to disk.** `workflow/screening.py:175` persists only the `CasePacket`; the `case_score` dict travels up to `scripts/40_screen.py`, gets printed, and is dropped. Recomputing it from a persisted packet is *almost* possible — `signals`, `enforcement_matches`, `legal_status_per_match` and `counter_evidence.confidence_adjustment` are all in the packet — but **`entity_adjudications` are not persisted anywhere**, and `ScoringService.score` reads them for `identity_integrity` and for the "unresolved entity-match conflict" gate reason (`workflow/state.py:128-131`, `:159-160`). A recomputation would therefore silently assume zero conflicts, i.e. fabricate a number. Found 2026-08-18 while scoping M13. | Fixing it is a ~3-line edit (persist the per-provider summary `screen_provider` already returns, which contains `case_score.model_dump(mode="json")` in full) — but it only produces data on the **next** screening run, so it is M13's call whether to pay for a fresh run or ship a dashboard whose tier chart is recomputed-and-labelled-approximate. Do not silently recompute and present it as exact. | **M13** |
+| D-24 | **No provider in the current 244-case corpus can reach `HIGH_PRIORITY`.** Measured 2026-08-18 over the persisted packets: 48 cases fire 0 signal families, 163 fire 1, 33 fire 2, **0 fire 3** — and `config/screening.yaml`'s `escalation_gate.min_independent_signal_families` is 3 against exactly 3 defined families, so the gate currently requires *all three* to fire. Zero `enforcement_matches` across all 244 as well. The real distribution is 0 HIGH / 196 STANDARD / 48 LOW. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. It is recorded here because two upcoming milestones trip over it: **M11 adds a 4th family**, which changes what "3 of N" means and must be re-measured, not assumed; and **M14 charts the tier distribution**, which will be a bar of height zero unless something changes. Neither milestone may tune `min_independent_signal_families` to manufacture a nicer-looking demo — that is gaming the gate, and it would be a lie of exactly the kind §0.1 rule 5 exists to prevent. | **M11** (re-measure), **M14** (chart honestly) |
+| D-25 | **`grounded_research` still has no live consumer** — extends D-15. Confirmed 2026-08-18: the only references outside the agent module itself are in `scripts/45_smoke_grounded_research.py`. `data/evidence/` holds 7 artifacts total, so the citation trail the grounding pillar is graded on has almost no accumulated material. | D-15 has been open since M4 because no Phase 1 agent had a natural reason to call it. **The dashboard is the first natural consumer this project has ever had** — a per-case "run grounded research on this provider" endpoint would close D-15 for real. That is a scope decision for M13/M14, not an assumed default; if it is not taken, M14 must not show an empty panel captioned as if data were expected. | **M13/M14** — decide explicitly, either way |
 
 ---
 
@@ -2467,3 +2543,697 @@ populated.
 - [x] §2 status row → `DONE`; §3 Current State replaced — this is the last
   milestone; every debt in §4 has a final disposition (cleared, or an
   honest permanent/unscheduled reason — none silently dropped)
+
+---
+
+### PHASE 2 SLICE (M11-M14) — still §5, same rules
+
+Authorized by `CLAUDE.md` **Amendment 4**, which narrowly reverses three of
+`phase_1_build_plan.md` §1's non-goals (Maps/land-use classification, ML
+models, web frontend) for these four milestones only. Read Amendment 4 before
+starting any of them — it also *clarifies* hard rule 1 rather than repealing
+it, and getting that distinction wrong is the fastest way to break the one
+property that makes this project credible.
+
+Same rules as §0: one milestone per session, checkpoint passes or the
+milestone is `BLOCKED`, no starting M12 before M11 is `DONE`.
+
+---
+
+### M11 — Physical Existence signal (Google Maps) · `TODO`
+
+**Scope.** The signal `phase_1_build_plan.md` Amendment 3 explicitly deferred
+to Phase 2 — "address-type classification (residential vs. commercial vs.
+mailbox-store)" — built as a **deterministic tool, not an agent**:
+`tools/maps_tools.py` (pure classification over a Maps API response), a batch
+classifier `scripts/60_classify_addresses.py` that writes a `location_type`
+property onto `Address` nodes and stores each raw Maps response as an
+`EvidenceArtifact`, and a new `physical_existence` detector in
+`tools/signal_tools.py` that reads that property with the same
+`(driver, npi, thresholds)` signature every other detector has. Classification
+happens **once, offline, in a batch script** — never inside the 250-provider
+screening fan-out. First milestone, so it also carries the credential
+verification for the whole Maps question.
+
+#### Action Plan
+
+**Goal.** At the end of M11, `Address` nodes carry a `location_type` derived
+from a real Google Maps API call, each classification is backed by a stored
+`EvidenceArtifact` whose `artifact_id` resolves through the existing
+`validate_citations` path, and a tenth deterministic detector —
+`physical_existence` — fires when a provider's practice address classifies as
+residential or as a commercial mail-receiving agency (mailbox store). This is
+the first Phase 2 signal and the first evidence in this system that comes from
+outside NPPES/LEIE/DOJ/state-Medicaid. It serves `CLAUDE.md` Amendment 3's own
+description of what Maps was deferred *for*, and it is the piece that makes
+the M14 dashboard's per-case drill-down show something a graph query alone
+cannot produce.
+
+**Inherited context.**
+
+1. **Phase 1 is complete and green.** Re-verified 2026-08-18 at the start of
+   the planning session: `pytest tests/ -q` → `270 passed`, `ruff check src/
+   tests/ scripts/` clean, `mypy src/` clean across 63 source files. If it is
+   not green when you start, that is a `BLOCKED` finding for whatever changed
+   it, not something to work around.
+2. **The Maps credential does not exist yet, and the operator's description of
+   it should not be trusted.** Verified by grep: `MAPS` appears nowhere in
+   `.env`, `.env.example`, `src/specter/settings.py`, or `config/`. The
+   operator said they "will enable that role in the google application
+   secret". `CLAUDE.md` Amendment 3 already investigated this once and
+   concluded the opposite: **Maps Platform authenticates with an API key, not
+   with the Vertex service account, and Maps roles do not exist in Vertex
+   IAM.** Amendment 4 restates this as unconfirmed rather than settled,
+   because nobody has actually tried it. **Step 1 is asking the operator
+   exactly what they provisioned and proving it works with a real HTTP call**
+   — same discipline as `scripts/40_screen.py:38`'s
+   `_confirm_azure_key_alive`. Do not write a line of classifier code against
+   an unverified credential; the Azure key in this project has flipped dead
+   twice (D-20) and the house rule is now to verify every credential fresh.
+3. **`_SIGNAL_DETECTORS` is a fixed-signature tuple.**
+   `agents/graph_investigation.py:78-88` holds nine
+   `signal_tools` functions and calls them uniformly at line 109:
+   `[d(driver, npi, thresholds) for d in _SIGNAL_DETECTORS]`. A detector that
+   needed an API key or an `evidence_dir` would break that uniformity. **This
+   is the single reason the design precomputes into the graph**: the batch
+   script does all the I/O, the detector is a pure Cypher read with the
+   standard three arguments and no network call. Do not "simplify" this by
+   calling Maps from inside the detector — it would put a rate-limited
+   external HTTP call inside a 4-way-concurrent 250-provider fan-out, which is
+   precisely the shape that produced M10's three separate concurrency bugs
+   (`NOTES_API_DEVIATIONS.md` D23).
+4. **Adding a tool binding invalidates every prompt cache.**
+   `tools/signal_bindings.py`'s returned list feeds
+   `generate_b0_tool_schemas`, and B0 sits **above** the cache boundary. A new
+   binding changes B0's bytes, so the next run's prefix-cache hit rate drops
+   to roughly zero on the first pass and recovers on the second.
+   `scripts/05_generate_prompt_blocks.py` must be re-run and
+   `prompts/blocks/b0_tool_schemas.md` committed **in the same commit** —
+   `tests/test_prompt_compiler.py` asserts the committed file matches what the
+   script produces, so forgetting turns into a red suite rather than silent
+   drift. Expect and *report* the one-run cache dip; do not treat it as a
+   regression.
+5. **`source_ids` have exactly two legal shapes**, enforced by
+   `tools/evidence_tools.py:23-31` and `:57-73`: `graph:<type>:<key>` where
+   `<type>` is one of `provider|address|phone|officer|exclusion|community|
+   enforcement_case`, or a **bare artifact_id** (the sha256 of the artifact's
+   content) resolving to `data/evidence/<artifact_id>.txt`. There is no
+   `maps:` shape and adding one means editing `_GRAPH_LABEL_KEY`. **M9 lost
+   live time to exactly this bug** — an unresolvable `source_ids` format in
+   `signal_tools.address_churn`. Your new signal's `source_ids` must be
+   `[f"graph:address:{normalized_key}", artifact_id]` and nothing else.
+6. **Address nodes and what they already carry.**
+   `graph/loader.py:189-206` merges on `normalized_key` and sets
+   `street_number`, `street_name`, `street_type`, `city`, `state`, `zip5`,
+   `data_origin`, `source_id`, `observed_at`, `ingested_at`, `confidence` —
+   all under **`ON CREATE SET`**, so a later-written `location_type` survives
+   a loader re-run. Live counts (2026-08-18): **7,848** Address nodes, **7,791**
+   with `street_number`+`street_name`+`zip5` all present. The 244 providers in
+   `data/cases/` map **1:1 onto 244 distinct Address nodes**, 2 of which are
+   street-incomplete. So a full classification pass over just the screened set
+   is **244 API calls**, and over every real address in the graph is ~7.8k.
+7. **`data_origin` discipline is the thing most likely to bite you here
+   (hard rule 5).** A Maps response is `public` data. A synthetic provider's
+   address is `synthetic` data. Classifying a synthetic address with a real
+   Maps call and storing the result unlabelled would mix origins inside one
+   case packet, which `CLAUDE.md` calls a hard failure. **Classify only
+   `Address` nodes whose `data_origin = 'public'`.** Leave synthetic
+   addresses' `location_type` null, and have the detector return `None` when
+   it is null.
+8. **S01 is the scenario this signal was born to catch, and it will probably
+   still not catch it.** `ingest/synthetic.py:16-31` documents S01
+   ("shell-at-residential") as deliberately signal-less *because no
+   address-type classifier exists*, and `judge/detection_eval.py:22` encodes
+   `"S01": []`. `JudgeReport.md`'s per-scenario table prints "no (by design)"
+   for it. **But S01's five providers sit at fabricated addresses** —
+   `ingest/synthetic.py:127-134` plants `"{100+i} Residential Ct Apt {i}",
+   Miami FL 33101` — and Google cannot classify a street that does not exist.
+   Per point 7 you will not even call Maps for them. **Do not promise that
+   M11 closes S01.** Step 8 offers the operator a way to close it honestly;
+   if they decline, report S01 as still-undetected and say why.
+9. **The escalation gate is about to shift under you — debt D-24.** Measured
+   2026-08-18 over the 244 persisted packets: 48 fire 0 signal families, 163
+   fire 1, 33 fire 2, **0 fire 3**. With three families defined and
+   `min_independent_signal_families: 3`, the gate today requires *all three*,
+   and no provider reaches `HIGH_PRIORITY`. Adding `physical_existence` as a
+   fourth family makes the gate "3 of 4", which is materially easier.
+   **Measure the tier distribution before and after and report both numbers.**
+   You may not lower `min_independent_signal_families` to make the demo look
+   better.
+10. **Do not add a Maps client library.** `httpx==0.28.1` is already a direct
+    dependency and every Maps Platform surface you need is a plain HTTPS
+    JSON endpoint. `googlemaps` is not installed and would be a new
+    dependency (plus a `mypy` strict override) for zero capability. M11 should
+    add **no** new package.
+
+**File manifest.**
+| Path | Action | Notes |
+|---|---|---|
+| `.env.example` | EDIT | New `# ═══ M11 — Google Maps Platform (address classification) ═══` section with one line. Name the var whatever Step 1 proves is real — `GOOGLE_MAPS_API_KEY` if it is an API key. |
+| `src/specter/settings.py` | EDIT | One `SecretStr \| None` field with a `default=None` alias, plus its name added to the existing `_blank_to_none` validator list (lines 80-96). Nothing else. |
+| `src/specter/tools/maps_tools.py` | CREATE | ~150 lines. One HTTP call function + one pure classification function. Both documented as deterministic-at-inference. |
+| `src/specter/core/contracts.py` | EDIT | Add `AddressClassification`; add the new threshold field(s) to `ScreeningThresholds` (line 256). Contracts live here only (CLAUDE.md). |
+| `config/screening.yaml` | EDIT | New threshold(s), the Maps-type → `location_type` mapping table, and `physical_existence` under `signal_families`. **No magic numbers or type lists in code.** |
+| `scripts/60_classify_addresses.py` | CREATE | ~120 lines. Batch classifier: credential check → select unclassified public addresses → call Maps → `store_artifact` → write `location_type` + `location_type_source_id` + `classified_at`. `--limit` flag, resumable, fails loudly. |
+| `src/specter/tools/signal_tools.py` | EDIT | Add `physical_existence(driver, npi, thresholds) -> RiskSignal \| None` only. Do not touch the other nine. Watch the 400-line ceiling — the file is 291 lines today. |
+| `src/specter/tools/signal_bindings.py` | EDIT | One binding function + docstring, added to the returned list. The docstring is model-facing text above the cache boundary — write it once, carefully. |
+| `src/specter/agents/graph_investigation.py` | EDIT | Add the name to `_SIGNAL_TOOL_NAMES` (line 65) and the function to `_SIGNAL_DETECTORS` (line 78). Two lines. |
+| `prompts/blocks/b0_tool_schemas.md` | REGENERATE | `python scripts/05_generate_prompt_blocks.py`. Commit with the tool change (Inherited context 4). |
+| `src/specter/graph/schema.cypher` | EDIT | Only if you add an index on `location_type`. Optional — 7.8k nodes do not need one. |
+| `tests/test_maps_tools.py` | CREATE | Cases under Step 7. Offline: no live Maps call in the suite. |
+| `tests/test_signal_tools.py` | EDIT | One test for the new detector against a fixture Address node. |
+| `NOTES_API_DEVIATIONS.md` | EDIT | New `## D25` — whatever the real Maps credential mechanism and API-response shape turn out to be. This is the expensive knowledge; record it. |
+
+**Read before writing.**
+1. `CLAUDE.md` Amendment 3 in full, then Amendment 4 — Amendment 3 says why
+   Maps was excluded; Amendment 4 says exactly how much of that is reversed.
+2. `src/specter/tools/signal_tools.py` lines 1-64 and 206-262 — `_signal()`'s
+   helper signature, and `geographic_spread` as the closest existing model
+   (it is the one detector that already carries `known_limitations` and a
+   `geocoding_method`).
+3. `src/specter/tools/evidence_tools.py` lines 23-31 and 34-73 —
+   `_GRAPH_LABEL_KEY`, `store_artifact`, and the two `source_id` resolution
+   paths. Read this before you choose a `source_ids` format, not after.
+4. `src/specter/agents/graph_investigation.py` lines 55-115 — the detector
+   tuple and the uniform call site.
+5. `src/specter/tools/signal_bindings.py` lines 1-60 and the final `return`
+   list — the exact docstring shape B0 renders.
+6. `src/specter/graph/loader.py` lines 189-206 — the Address `MERGE` /
+   `ON CREATE SET` block.
+7. `scripts/40_screen.py` lines 38-58 — `_confirm_azure_key_alive`, the house
+   pattern for "prove the credential before spending".
+8. `config/screening.yaml` in full (55 lines) — thresholds and
+   `signal_families` blocks, plus the comment explaining what a family *is*.
+
+**Steps.**
+
+1. **Ask the operator, then prove it.** Ask, verbatim, which of these they
+   provisioned: (a) a Google Maps Platform **API key** (a `AIza…` string,
+   created under APIs & Services → Credentials, with specific Maps APIs
+   enabled on the project and ideally an HTTP-referrer/IP restriction), or
+   (b) an IAM role added to the existing Vertex service account. Amendment 3
+   says (b) does not exist; if they insist it does, ask for the exact role
+   name and test it rather than arguing. Then prove whichever it is with a
+   real call before writing anything:
+
+   ```bash
+   # API-key path — replace the endpoint once Step 2 picks the API.
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     "https://maps.googleapis.com/maps/api/geocode/json?address=1600+Amphitheatre+Parkway,+Mountain+View,+CA&key=$GOOGLE_MAPS_API_KEY"
+   ```
+   A `200` with `"status": "OK"` is proof. `REQUEST_DENIED` with
+   `"This API project is not authorized to use this API"` means the API is not
+   enabled on the project — that is an operator action, not something you can
+   code around. **If the credential cannot be proven live, M11 is `BLOCKED`**
+   with the exact error recorded here. Do not stub a classifier and pretend.
+
+2. **Decide which Maps API actually discriminates, empirically.**
+   `UNVERIFIED:` nobody in this project has called any of these. Three
+   candidates, in the order worth trying:
+   - **Address Validation API** (`POST https://addressvalidation.googleapis.
+     com/v1:validateAddress`) — returns a `uspsData` block whose `dpvCmra`
+     field is USPS's own Commercial Mail Receiving Agency flag, i.e. a direct
+     mailbox-store discriminator, alongside `addressRecordType`. If this
+     works it is far and away the best fit and probably the whole milestone.
+   - **Places API (New) Text Search** (`POST https://places.googleapis.com/
+     v1/places:searchText`) — returns `types` for establishments at an
+     address; useful for "is there a business here at all" and for
+     `post_office`/shipping-store types. Requires a `X-Goog-FieldMask` header.
+   - **Geocoding API** — cheapest, but its `types` (`street_address`,
+     `premise`, `subpremise`, `route`) tell you the *granularity* of the
+     match, not whether the building is a home. `subpremise` on an apartment
+     is weak evidence at best.
+
+   **Run each candidate by hand against 5 addresses with known answers**
+   before committing: a hospital, a suburban house, a UPS Store, an office
+   tower, and one of the 244 real screened addresses. Write the actual JSON
+   shapes into `NOTES_API_DEVIATIONS.md` D25. Pick the API whose response
+   contains a field that genuinely separates the five — do not build a
+   classifier on top of a field that turns out to be the same for all of
+   them.
+
+3. **Settings + `.env.example`.** Add exactly one field, mirroring the
+   existing optional-credential pattern:
+   ```python
+   # --- Google Maps Platform (M11, address classification) ---
+   google_maps_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_MAPS_API_KEY")
+   ```
+   and add `"google_maps_api_key"` to the `@field_validator(...)` list at
+   `settings.py:80-96` so an empty `.env` line becomes `None` rather than
+   `SecretStr("")`. Default `None`, because every existing test and every
+   non-M11 script must keep working without a Maps key.
+
+4. **`tools/maps_tools.py` — two functions, one of them pure.**
+   ```python
+   def fetch_address_record(address_line: str, api_key: str) -> dict[str, Any]:
+       """One HTTPS call to the API chosen in Step 2. Raises on any non-200 —
+       no silent fallback (CLAUDE.md hard rule 7). Returns the raw decoded
+       JSON, unmodified, so the stored artifact is the real response."""
+
+   def classify(record: dict[str, Any], type_map: dict[str, list[str]]) -> AddressClassification:
+       """Pure. No I/O, no network, no clock. Maps the API response onto a
+       location_type using `type_map` from config/screening.yaml. Returns
+       location_type='unclassified' with a reason rather than guessing."""
+   ```
+   Keeping `classify` pure is what makes the whole thing unit-testable
+   offline against a recorded fixture, and it is what lets you honestly call
+   this "deterministic at inference" in the case packet.
+
+   The contract:
+   ```python
+   class AddressClassification(SpecterModel):
+       """Output of `tools/maps_tools.classify` (M11). `location_type` is
+       derived by a documented lookup table in config/screening.yaml, never
+       by a model. `unclassified` is a valid, expected result — a PO-box-only
+       ZIP or an address Google has never seen is not an error."""
+       normalized_key: str
+       location_type: Literal[
+           "commercial_medical", "commercial_other", "residential",
+           "mailbox_store", "unclassified",
+       ]
+       matched_formatted_address: str | None
+       raw_types: list[str]
+       classification_reason: str
+       known_limitations: list[str]
+   ```
+
+5. **`config/screening.yaml`.** Three additions, no magic numbers in code:
+   ```yaml
+   thresholds:
+     # ... existing ...
+     physical_existence_min_colocated: 1.0   # providers at an implausible-type address
+
+   # M11 — Google Maps address-type classification (CLAUDE.md Amendment 4).
+   # The mapping is data, not code: Google's type vocabulary changes, and a
+   # reviewer must be able to see exactly which type produced which verdict.
+   location_type_map:
+     mailbox_store: [post_office, shipping_and_mailing_service, ...]   # fill from Step 2
+     commercial_medical: [hospital, doctor, pharmacy, medical_lab, ...]
+     commercial_other: [establishment, point_of_interest, store, ...]
+     residential: [premise, subpremise, ...]
+   physical_existence:
+     implausible_location_types: [residential, mailbox_store]
+
+   signal_families:
+     # ... existing three ...
+     physical_existence: [physical_existence]
+   ```
+   **On the family question**, there is a real argument each way and you
+   should state which you took: `physical_existence` derives from the same
+   *address* as `address_degree`, which is the config's own stated reason for
+   collapsing signals into a family; but it derives from a different
+   *underlying fact* (what kind of place this is, from an external source)
+   and Amendment 3 named it as its own category. **Recommended: a fourth
+   family**, because folding it into `address_anomaly` would let a single
+   Maps call raise a family whose other members are graph-degree facts, which
+   is the double-counting the family mechanism exists to prevent. Whichever
+   you choose, re-measure the tier distribution (Inherited context 9).
+
+6. **`scripts/60_classify_addresses.py`.** Order matters:
+   ```
+   confirm the Maps credential live (Step 1's call, as a function — same
+     shape as scripts/40_screen.py:38)
+   → SELECT addresses to classify:
+       MATCH (a:Address)
+       WHERE a.data_origin = 'public' AND a.location_type IS NULL
+         AND a.street_number IS NOT NULL AND a.street_name IS NOT NULL
+         AND a.zip5 IS NOT NULL
+       RETURN a.normalized_key, a.street_number, a.street_name, a.street_type,
+              a.city, a.state, a.zip5
+       ORDER BY a.normalized_key            // deterministic, resumable
+       LIMIT $limit
+   → for each: fetch_address_record → store_artifact(json.dumps(record,
+       sort_keys=True), content_type="application/json",
+       source_id=f"maps:{normalized_key}", evidence_dir=data/evidence,
+       extraction_method="google_maps_<api>") → classify()
+   → SET a.location_type, a.location_type_source_id = <artifact_id>,
+         a.location_type_reason, a.classified_at
+   ```
+   `--limit` defaults to something small (25) so a first run is cheap; the
+   `location_type IS NULL` filter makes it resumable and idempotent. Add
+   `--npis` or reuse the cohort query if you want to classify exactly the 244
+   screened addresses first — that is the set M14 will render, and it is the
+   cheapest path to a complete demo. Note that `store_artifact`'s `source_id`
+   argument is *metadata on the artifact*, not the citation string; the
+   citation string is the returned `artifact_id`.
+
+7. **The detector.** Standard signature, pure Cypher, no network:
+   ```python
+   def physical_existence(driver, npi, thresholds) -> RiskSignal | None:
+       # MATCH (p:Provider {npi:$npi})-[:LOCATED_AT]->(a:Address)
+       # WHERE a.location_type IS NOT NULL
+       # MATCH (a)<-[:LOCATED_AT]-(any:Provider)
+       # RETURN a.normalized_key AS key, a.location_type AS location_type,
+       #        a.location_type_source_id AS artifact_id,
+       #        count(DISTINCT any) AS colocated
+       ...
+   ```
+   Fires only when `location_type ∈ implausible_location_types` **and**
+   `colocated >= thresholds.physical_existence_min_colocated`. `value` is
+   `colocated` — a real count from the graph, so the number in the case
+   packet still traces to a deterministic query, and the Maps call acts as
+   the *gate* rather than as the source of a number.
+   `source_ids=[f"graph:address:{key}", artifact_id]`.
+   `known_limitations=["places_type_heuristic", "not_field_verified"]`.
+   Returns `None` — not an error — when `location_type` is null, which is the
+   correct behaviour for every synthetic address and every address not yet
+   classified.
+
+   `tests/test_maps_tools.py`: (a) `classify` maps a recorded real response
+   to the expected `location_type`; (b) an empty/no-match response yields
+   `unclassified` and never raises; (c) a non-200 from `fetch_address_record`
+   raises rather than returning a default; (d) `classify` is pure — same
+   input twice, byte-identical `model_dump_json()`. Plus one case in
+   `tests/test_signal_tools.py` asserting the detector returns `None` for an
+   address with a null `location_type`. **No live Maps call in the suite.**
+
+8. **Optional, operator's decision — the S01 question.** Closing S01 honestly
+   requires the five S01 providers to sit at *real* residential addresses
+   (real street, real ZIP, in Miami), still tagged `data_origin='synthetic'`
+   on the Provider node. That is a ~5-line edit to
+   `ingest/synthetic.py:127-134` plus a graph reload, and it would change
+   `judge/detection_eval.py:22`'s `"S01": []` to
+   `"S01": ["physical_existence"]` and `JudgeReport.md`'s headline from "8/8
+   scenarios with a Phase 1 detector" to 9/9. **Ask the operator; do not do
+   it unilaterally** — it mutates the frozen synthetic corpus every prior
+   milestone's numbers were measured against, and it also runs into
+   Inherited context 7 (you would then be storing a `public` Maps
+   classification on an address reached from a `synthetic` provider, which
+   needs its `data_origin` labelling thought through, not assumed). If they
+   decline, write it into §4 as debt with M12 as the due date.
+
+9. **Regenerate B0, last.** `python scripts/05_generate_prompt_blocks.py`,
+   confirm the diff to `prompts/blocks/b0_tool_schemas.md` is exactly your
+   new tool's schema and nothing else, and commit it in the same commit.
+
+**Checkpoint.**
+```bash
+# 1. credential proven live, before anything else
+python -c "
+from specter.settings import get_settings
+import httpx, os
+k = get_settings().google_maps_api_key
+assert k is not None, 'no Maps key in .env'
+r = httpx.get('https://maps.googleapis.com/maps/api/geocode/json',
+              params={'address':'1600 Amphitheatre Parkway, Mountain View, CA',
+                      'key':k.get_secret_value()}, timeout=20)
+print(r.status_code, r.json().get('status'))
+"
+# → 200 OK
+
+# 2. classify the 244 screened addresses for real
+python scripts/60_classify_addresses.py --limit 250
+# → prints classified=<n> unclassified=<n> skipped_synthetic=<n> and writes
+#   <n> new files into data/evidence/
+
+# 3. the property is really on the nodes, with a real distribution
+cypher-shell -u neo4j -p <pw> \
+  "MATCH (a:Address) WHERE a.location_type IS NOT NULL
+   RETURN a.location_type, count(*) ORDER BY count(*) DESC"
+# → a real breakdown across commercial_*/residential/mailbox_store/unclassified
+
+# 4. the detector fires for at least one real provider, and its citations resolve
+python -c "
+from neo4j import GraphDatabase
+from pathlib import Path
+from specter.settings import get_settings
+from specter.tools.signal_tools import load_thresholds, physical_existence
+from specter.tools.evidence_tools import validate_citations
+s = get_settings(); d = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password.get_secret_value()))
+th = load_thresholds(Path('config/screening.yaml'))
+hits = []
+with d.session() as ses:
+    npis = [r['npi'] for r in ses.run(\"MATCH (p:Provider)-[:LOCATED_AT]->(a:Address) WHERE a.location_type IN ['residential','mailbox_store'] RETURN p.npi AS npi LIMIT 20\")]
+for npi in npis:
+    sig = physical_existence(d, npi, th)
+    if sig: hits.append(sig)
+print('fired:', len(hits))
+if hits:
+    print(validate_citations(hits[0].source_ids, d, Path('data/evidence')))
+"
+# → fired >= 1, and CitationReport.all_resolved is True with 0 unresolved
+
+# 5. B0 is regenerated and committed
+python scripts/05_generate_prompt_blocks.py     # → changed=True on the first run,
+                                                #   changed=False when re-run
+
+# 6. a real screening pass end to end, small, with the new signal live
+python scripts/40_screen.py --limit 25
+
+# 7. suite
+pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+```
+→ `pytest` at **270 + your new tests**, ruff and mypy clean. Record in the
+Result section: the real `location_type` distribution, how many of the 244
+screened addresses classified vs. came back `unclassified`, whether
+`physical_existence` fired for any real provider, the **before/after tier
+distribution** (Inherited context 9), and the real Maps spend.
+
+**Traps.**
+
+- **Regenerating B0 tanks the cache for one run.** Expected, not a bug —
+  every agent's stable prefix changed. Report the dip and the recovery on the
+  second run rather than hunting a phantom caching regression. And if you
+  *forget* to regenerate, `tests/test_prompt_compiler.py` goes red with a
+  diff that looks unrelated to what you changed.
+- **A `maps:` `source_id` will not resolve.** `validate_citations` only knows
+  `graph:<one of seven types>:<key>` and bare artifact ids
+  (`evidence_tools.py:23-31`). Cite the artifact by its returned
+  `artifact_id`. M9 lost live debugging time to this exact class of bug.
+- **`store_artifact` hashes content, so `artifact_id` is content-addressed.**
+  Two addresses whose Maps responses are byte-identical collapse to one
+  artifact. Include the queried address in the stored JSON so each artifact
+  is genuinely distinct, or accept the collapse knowingly.
+- **Never call Maps from inside a detector.** Inherited context 3. A network
+  call inside `_SIGNAL_DETECTORS` runs 250 times under 4-way concurrency and
+  will rate-limit mid-run — the exact failure shape D23 documents.
+- **`data_origin` mixing is a hard failure, not a warning.** Filter to
+  `a.data_origin = 'public'` in the classifier's own Cypher, not in Python
+  after the fact.
+- **`unclassified` is a result, not an error.** Amendment 3 set this
+  precedent for `zip_centroid` returning `None`. A PO-box ZIP, a rural route,
+  a brand-new building — all legitimately unclassifiable. Never substitute a
+  guess, and never drop the provider.
+- **Google's pricing and free tier are `UNVERIFIED:` here** — the SKU
+  structure changed in 2025 and this project has never billed a Maps call.
+  Check the current per-1000 price and monthly free allowance for whichever
+  API Step 2 picks *before* running a 7.8k-address pass. 244 calls is
+  certainly trivial; 7,791 might not be. Start with the 244.
+- **Restrict the key.** An unrestricted Maps API key in a `.env` that also
+  has a history of being committed-adjacent is a real liability. Ask the
+  operator to add an API restriction (only the APIs you use) and an IP
+  restriction. `.env` is gitignored; keep it that way.
+- **`signal_tools.py` is 291 lines** against CLAUDE.md's 400-line ceiling.
+  The new detector fits; a second one might not.
+
+**Definition of done.**
+- [ ] Operator asked directly about the credential mechanism; the real
+      answer recorded in `NOTES_API_DEVIATIONS.md` D25, including whether
+      Amendment 3's "Maps roles don't exist on the Vertex SA" held up
+- [ ] Maps credential proven with a real 200 before any classifier code was
+      written; `BLOCKED` recorded honestly if it could not be
+- [ ] The chosen API and its real response shape recorded in D25, with the
+      5-known-address discrimination test that justified the choice
+- [ ] `tools/maps_tools.py`: `classify` is pure and unit-tested offline
+      against a recorded real response
+- [ ] `config/screening.yaml` holds the type map, the threshold, and the
+      family entry — **zero** Maps type strings or numbers hardcoded in `.py`
+- [ ] `scripts/60_classify_addresses.py` ran for real; `location_type`
+      distribution recorded; `data/evidence/` grew by the expected count
+- [ ] Only `data_origin='public'` addresses were classified
+- [ ] `physical_existence` fires for ≥1 real provider and its `source_ids`
+      pass `validate_citations` with `all_resolved=True`
+- [ ] `prompts/blocks/b0_tool_schemas.md` regenerated and committed in the
+      same commit as the binding
+- [ ] Tier distribution measured **before and after** adding the family, both
+      numbers reported; `min_independent_signal_families` **not** lowered
+- [ ] S01 disposition explicit: closed with operator sign-off, or reported
+      as still-undetected with the reason and a §4 debt entry
+- [ ] No new dependency added
+- [ ] `pytest tests/ -q`, `ruff check src/ tests/ scripts/`, `mypy src/` all
+      clean
+- [ ] §2 status row → `DONE`; §3 Current State replaced; §4 updated; M12's
+      Action Plan written
+
+---
+
+### M12 — ML models as tools · `TODO`
+
+**Scope.** Classical, trained, deterministic-at-inference models exposed as
+**tools**, in `src/specter/tools/ml_tools.py` — the same shape as
+`tools/signal_tools.py`'s detectors, callable by an agent or by the dashboard,
+with a `model_version`, a stored artifact, and a `source_id` that flows into
+the evidence chain like every other number. `CLAUDE.md` Amendment 4 clarifies
+why this does **not** violate hard rule 1: the rule bans an *LLM* inventing a
+number, and a trained model computing one via a documented, versioned,
+reproducible function is exactly what "deterministic tool" has always meant
+here. An LLM-estimated risk score would still be a hard-rule-1 violation and
+is still forbidden.
+
+Adds `scikit-learn` — a deliberate, justified new dependency, recorded the way
+`fastexcel` was (debt D-19's precedent). **Verified 2026-08-18: `scikit-learn`,
+`numpy` and `scipy` are all absent from the venv**, so this is 3-4 transitive
+packages, not one, and `mypy strict` will likely need an override stanza in
+`pyproject.toml` alongside the existing `usaddress`/`igraph` ones.
+
+**Three findings from 2026-08-18 that shape this milestone and should be
+verified again rather than trusted:**
+
+1. **The features exist but are not directly reusable.** `signal_tools.py`'s
+   nine detectors each compute a real numeric value and then **throw it away
+   by returning `None` when it is under threshold** (e.g. `signal_tools.py:59`).
+   An ML feature vector needs the value regardless of threshold. Two ways
+   out: call each detector with a `ScreeningThresholds` whose values are all
+   zero/permissive so every detector returns its real number — which works
+   for seven of the nine but **not** for `exclusion_proximity` (its `max_hops`
+   is interpolated straight into the Cypher at line 164, so 0 produces an
+   invalid `[*1..0]` pattern) or `phoenix_pattern` (its value is only defined
+   when the pattern matches at all) — or write a dedicated feature-extraction
+   query. Decide deliberately; do not assume the threshold-zeroing trick
+   covers all nine.
+2. **The label set is thin and synthetic-dominated, and the milestone lives
+   or dies on being honest about it.** Live counts: **4** real providers and
+   **4** synthetic providers carry a direct `EXCLUDED_BY` edge, out of 8,445
+   real / 186 synthetic. The usable positives are really the **36 scenario
+   providers (S01-S10)** against **150 synthetic controls**; the real cohort's
+   6,970 providers are effectively unlabelled. **A supervised classifier
+   trained on that is a classifier trained on synthetic data**, and calling
+   its output a fraud probability would violate `phase_1_build_plan.md` §16
+   ("does not claim... to produce calibrated risk probabilities") as squarely
+   as an LLM guess would. The defensible shape is almost certainly:
+   **unsupervised anomaly detection** (e.g. `IsolationForest`, fixed
+   `random_state` like `graph/communities.py`'s Leiden already uses) fit on
+   the real cohort's feature matrix with **no labels at all**, and the
+   36-positive/150-control synthetic set used strictly as a **held-out
+   sanity evaluation** — "does the anomaly score rank the planted scenarios
+   above the controls?" — reported with the same candour
+   `judge/detection_eval.py` already applies to `precision@k = 0.00`. A small
+   supervised model may be worth adding *alongside* it, clearly labelled as
+   trained on synthetic data only. Verify the label counts yourself before
+   locking this in.
+3. **Where the output goes is an open design question with three answers,**
+   and the cheapest defensible one wins: a new signal type (feeds the case
+   packet and the escalation gate — most integrated, most invasive, and
+   re-opens the B0/cache-boundary and signal-family questions M11 just
+   worked through), a new agent-callable tool (a tool binding, so also above
+   the cache boundary), or a **dashboard-only computation** read by M13's API
+   (zero cache-boundary risk, zero change to Phase 1's verified behaviour,
+   and still fully demoable). Pick on evidence, justify the pick here.
+
+Whatever ships must carry: a fixed `random_state`, a persisted model artifact
+with a `model_version`, the feature list and its ordering pinned in
+`config/screening.yaml` (not in code), an explicit training-set disclosure in
+the tool's output, and `known_limitations` naming the synthetic-label problem
+in the same sentence as the score. It must not be described anywhere — code,
+config, dashboard, or README — as a probability of fraud.
+
+#### Action Plan
+
+(not yet written)
+
+---
+
+### M13 — Dashboard data API · `TODO`
+
+**Scope.** A FastAPI application serving the artifacts this system *already
+produces*, as clean JSON, for M14 to render. **No new data is generated in
+this milestone** — it is purely "expose what is real, structured". Verified
+2026-08-18: `fastapi==0.141.1` and `uvicorn==0.52.1` are already installed
+transitively via `google-adk[mcp]`, so this milestone should add **no new
+dependency**.
+
+Real sources, with their real shapes as measured on 2026-08-18:
+
+- **`data/cases/*.json`** — 244 `CasePacket`s. 196 have ≥1 fired signal;
+  signal-type counts `exclusion_proximity` 122, `officer_degree` 103,
+  `geographic_spread` 73, `phone_degree` 9, `address_degree` 3,
+  `enumeration_burst` 1; **zero** have any `enforcement_matches`;
+  `confidence_adjustment` non-zero on all 196, range -0.35 to 0.0.
+- **`data/ledger.sqlite`** — 48,095 rows, 9 agent/tier pairs. Reuse
+  `llm/ledger.py`'s `CostLedger` and the `GROUP BY agent, tier` query
+  `obs/dashboard.py:25-37` already runs, rather than writing a second SQL
+  layer. `cost_usd` is `NULL` throughout (**D-8**) and must serialize as
+  `null` — never `0`.
+- **`JudgeReport.md`** — parse or re-derive; `judge/` has the real functions,
+  so re-deriving from `judge/detection_eval.py` and the stored report data is
+  cleaner than regexing markdown. Calibration 8/8, per-scenario recall 8/8,
+  `precision@k` 0.00.
+- **Neo4j** — graph counts for the cohort overview. Read through the existing
+  read-only guardrails, not a fresh unguarded driver.
+- **M11/M12 outputs** — `Address.location_type` and the ML score, once they
+  exist.
+
+**Two blockers this milestone must resolve, not inherit silently:**
+
+1. **Debt D-23 — `CaseScore` is not persisted**, so `priority_tier` cannot be
+   read from disk, and it cannot be recomputed exactly either (the
+   `entity_adjudications` `ScoringService.score` needs are not stored
+   anywhere). Either persist it (a ~3-line edit to
+   `workflow/screening.py:175-184` writing the summary dict that already
+   contains `case_score` in full, plus one fresh screening run to populate
+   it) or recompute-and-label-approximate. **Do not recompute and present it
+   as exact.**
+2. **Debt D-24 — the honest tier distribution is 0 HIGH / 196 STANDARD / 48
+   LOW.** The API must return that, and M14 must chart it. Do not tune the
+   gate.
+
+Also decide explicitly, per debt **D-25**, whether the API exposes a
+grounded-research endpoint — this would be the first live consumer
+`grounded_research` has ever had and would close **D-15** for real, but
+`data/evidence/` holds only 7 artifacts today, so without it any
+"citations" panel is empty by construction. Either wire it or say plainly
+that the panel is not backed.
+
+Fail loudly (hard rule 7): `data/cases/`, `data/evidence/` and
+`data/ledger.sqlite` are **gitignored run artifacts**, so on a fresh clone
+they simply do not exist. A missing artifact returns a real error naming what
+is missing and how to regenerate it — never an empty list that reads as "no
+findings".
+
+#### Action Plan
+
+(not yet written)
+
+---
+
+### M14 — Dashboard frontend · `TODO`
+
+**Scope.** The judge-facing UI over M13's API. Minimal and data-dense, in the
+same spirit as the rest of this repo — **server-rendered templates plus one
+CDN chart library is the expected shape** (`jinja2==3.1.6` is already
+installed transitively; a separate JS build toolchain needs a strong,
+written justification). This is a demo artifact, not a product: resist scope
+creep here harder than anywhere else in this plan.
+
+Three views, all backed by real artifacts:
+
+- **Cohort overview** — the real tier distribution (0 HIGH / 196 STANDARD /
+  48 LOW, debt D-24 — chart it honestly, including the zero bar, and say in
+  the UI *why* the gate is demanding), signal-family and signal-type
+  distribution across the 244 cases, cold-vs-warm cache hit rate (72% → 95%,
+  M10's real numbers) and the per-agent ledger table with `cost_usd` shown as
+  `-` (D-8), never `$0.00`.
+- **Per-case drill-down** — the signals table with `value` against
+  `threshold` (the numbers are already in every packet), the narrative, the
+  Skeptic's `counter_evidence.per_signal` rebuttals side-by-side with the
+  signals they rebut, the `citation_report`, M11's `location_type` with its
+  Maps evidence artifact, and M12's ML score with its training-set
+  disclosure attached — not as a bare number.
+- **JudgeReport view** — the verbatim `JUDGE INDEPENDENCE: LIMITED` block
+  first (`CLAUDE.md` Amendment 2 requires it verbatim wherever the judge's
+  numbers appear), then calibration accuracy 8/8, per-scenario recall 8/8,
+  `precision@k` 0.00 with its thin-denominator explanation, and the
+  deterministic-vs-LLM disagreement.
+
+The hard rules do not relax for a UI. Numbers rendered must come from the API,
+which gets them from tools — never computed in a template, never rounded into
+something that no longer matches the case packet. The banned-vocabulary list
+applies to any label or caption the UI adds. `data_origin` must be visible
+wherever synthetic and public data appear together. And the single most
+valuable thing this dashboard can show a judge is not a chart — it is that
+every number on screen can be clicked back to the tool result and the
+evidence artifact that produced it.
+
+#### Action Plan
+
+(not yet written)
