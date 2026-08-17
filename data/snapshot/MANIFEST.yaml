@@ -1,30 +1,36 @@
-frozen_at: '2026-08-06T16:10:24.253453+00:00'
+frozen_at: '2026-08-16T23:56:22.977964+00:00'
 sources:
   doj:
-    access_provider: justice.gov RSS feed
-    checksum_sha256: 39e77a4ca69d067f90379a293ab65ee209317fb67454e31651dbcc5d937f057c
+    access_provider: justice.gov press-releases search (Playwright MCP)
+    checksum_sha256: 60c59dd45068265cee8ecac60e101de49385270d2d6aa21a85e9fe47600498bd
     coverage:
+      fetch_method: playwright_mcp
+      pages_fetched: '1'
       topic_filter: healthcare_fraud
-      window: recent (~1-2 days)
     dataset_name: DOJ Press Releases (healthcare-fraud filtered)
     freshness_status: current
     known_limitations:
-    - RSS feed covers only a shallow recent window (~1-2 days); server-side topic/keyword
-      filters are ignored by the feed, so filtering is done client-side against title+description
-    - "deep archive coverage (plan's ~300-500 release estimate) requires Playwright\
-      \ MCP against justice.gov/news, which is Akamai-protected against plain HTTP\
-      \ clients \u2014 deferred to M7"
+    - "fetched via Playwright MCP (real headless Chromium \u2014 the search UI 403s\
+      \ to a plain HTTP client); `keys=`/`field_pr_topic=` are confirmed no-ops server-side\
+      \ (same list regardless of term), so the client-side title+description AND-filter\
+      \ is still authoritative, same as the RSS-based predecessor"
+    - "deep archive coverage (plan's ~300-500 release estimate) is NOT reachable:\
+      \ page>=1 returns a hard Akamai 'Access Denied', confirmed live via direct navigation,\
+      \ a fresh session's first request, and a real click on the pager's own 'Page\
+      \ 2' link \u2014 not a request-construction bug, a site-side block. This connector's\
+      \ real universe is one page of the current recent-releases list, the same shape\
+      \ RSS already provided. See NOTES_API_DEVIATIONS.md."
     license_or_terms: public domain (U.S. Government Work)
     original_publisher: U.S. Department of Justice
-    retrieved_at: '2026-08-06T16:09:57.992095Z'
+    retrieved_at: '2026-08-16T23:55:09.188048Z'
     row_count: 1
-    schema_version: doj-rss-2.0
-    snapshot_date: '2026-08-06'
+    schema_version: doj-playwright-mcp-1.0
+    snapshot_date: '2026-08-17'
     source_id: doj
-    source_url: https://www.justice.gov/news/rss?type=press_release
+    source_url: https://www.justice.gov/news/press-releases?keys=health+care+fraud
   leie:
     access_provider: HHS OIG
-    checksum_sha256: d9211e32313a494efaf603302842a9f7426efd744bbf3c0af6f0547778c9f51d
+    checksum_sha256: b01d22cf747a16ac6ca6e297acaa475557ec93976740e237d1fda5f80f537323
     coverage:
       jurisdiction: US
       scope: national, all states
@@ -35,15 +41,15 @@ sources:
       \ without an NPI on file) \u2014 never auto-link an exclusion lacking an NPI"
     license_or_terms: public domain (U.S. Government Work)
     original_publisher: HHS Office of Inspector General
-    retrieved_at: '2026-08-06T16:09:57.715613Z'
-    row_count: 83665
+    retrieved_at: '2026-08-16T23:55:01.134122Z'
+    row_count: 83842
     schema_version: leie-updated-csv-v1
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: leie
     source_url: https://oig.hhs.gov/exclusions/downloadables/UPDATED.csv
   nppes:
     access_provider: CMS NPI Registry API
-    checksum_sha256: 8644c1e19a3d0fb65587d7248995a35b5536009365093ed66b99295aa2be1fbd
+    checksum_sha256: 419e0e0ff07495b5b5398a7139d261671b85b4509e982f8b973f5db33455ffb0
     coverage:
       states:
       - FL
@@ -57,90 +63,112 @@ sources:
       against the full NUCC '332' code table, not assumed from one query
     license_or_terms: public domain (U.S. Government Work)
     original_publisher: Centers for Medicare & Medicaid Services (CMS)
-    retrieved_at: '2026-08-06T16:09:54.475761Z'
-    row_count: 8417
+    retrieved_at: '2026-08-16T23:54:57.632265Z'
+    row_count: 8435
     schema_version: npi-registry-api-2.1
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: nppes
     source_url: https://npiregistry.cms.hhs.gov/api/
   state_medicaid_ca:
     access_provider: California Department of Health Care Services (DHCS)
-    checksum_sha256: e541baa74e84032e93a74e6a2b88a94466bab6dc4f061f0c9c5e977fe257f5f2
+    checksum_sha256: 60db303b23c84ff10d7cb35775071a593c03d05fdba096b1cab5c0b9499ae0bc
     coverage:
       exclusion_authority: state_medicaid
       jurisdiction: CA
     dataset_name: DHCS Medi-Cal Suspended & Ineligible Provider (S&I) List
     freshness_status: current
     known_limitations:
-    - npi is always null for this source; auto-link is prohibited for any match lacking
-      an exact identifier (CLAUDE.md Amendment 1)
     - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
       \ into one precision number (CLAUDE.md Amendment 1)"
+    - npi is always null for this source; auto-link is prohibited for any match lacking
+      an exact identifier (CLAUDE.md Amendment 1)
     license_or_terms: public domain (state government work)
     original_publisher: California Department of Health Care Services (DHCS)
-    retrieved_at: '2026-08-06T16:10:16.295514Z'
-    row_count: 23229
+    retrieved_at: '2026-08-16T23:56:15.938949Z'
+    row_count: 23310
     schema_version: state-medicaid-v1
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: state_medicaid_ca
     source_url: https://data.chhs.ca.gov/api/3/action/package_show?id=8f70e05d-baa5-4296-a5ab-36318d530670
   state_medicaid_fl:
-    access_provider: Florida Agency for Health Care Administration (AHCA)
-    checksum_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    access_provider: Florida Medicaid Web Portal (FLMMIS, portal.flmmis.com)
+    checksum_sha256: acf1b5c8f743ce9ca3fe9522ab6873d5180f0e458a151919a690b5efa75587c0
     coverage:
       exclusion_authority: state_medicaid
       jurisdiction: FL
-    dataset_name: AHCA Medicaid Sanctioned/Terminated Provider List
-    freshness_status: unknown
+    dataset_name: Florida Medicaid Provider Master List (FLMMIS) - Ineligible providers
+    freshness_status: current
     known_limitations:
-    - npi is always null for this source; auto-link is prohibited for any match lacking
-      an exact identifier (CLAUDE.md Amendment 1)
     - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
       \ into one precision number (CLAUDE.md Amendment 1)"
-    - 'blocked by source-side bot protection (HTTP client): Client error ''403 Forbidden''
-      for url ''https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity''
-
-      For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403;
-      requires Playwright MCP (plan M7), not yet wired'
+    - 'derived from the FLMMIS Provider Master List, an enrollment file, not a published
+      sanctions list: the exclusion signal is Current Medicaid Enrollment Status ==
+      ''E'' (Ineligible)'
+    - "the source states no reason for ineligibility, so these rows may be administrative\
+      \ (e.g. failure to revalidate) rather than fraud-related \u2014 weight below\
+      \ a federal OIG exclusion (CLAUDE.md Amendment 1)"
+    - 'action_date is always null: the file carries enrollment-eligibility dates only,
+      never a termination or action date'
+    - provider_type is the raw FLMMIS Provider Type Code; no code->name lookup is
+      published with the file and none is invented (hard rule 2)
+    - npi is present on 220 of 246 rows; rows without one must never auto-link (CLAUDE.md
+      Amendment 1)
+    - AHCA's own sanctions list at ahca.myflorida.com remains Cloudflare-blocked;
+      this portal.flmmis.com file is a different source with different semantics,
+      not a mirror of it
     license_or_terms: public domain (state government work)
     original_publisher: Florida Agency for Health Care Administration (AHCA)
-    retrieved_at: '2026-08-06T16:09:58.970841Z'
-    row_count: 0
+    retrieved_at: '2026-08-16T23:56:05.724719Z'
+    row_count: 246
     schema_version: state-medicaid-v1
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: state_medicaid_fl
-    source_url: https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity
+    source_url: https://portal.flmmis.com/FLPublic/Portals/0/StaticContent/Public/Managed%20Care/prw19000.zip
   state_medicaid_tx:
-    access_provider: Texas Health and Human Services - Office of Inspector General
-      (HHS-OIG)
-    checksum_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    access_provider: OpenSanctions (mirror of the Texas OIG workbook)
+    checksum_sha256: fe2e8f53489e1674283ffcb6d3c88df93232317fe247cab3cedbecd58d87b2ee
     coverage:
       exclusion_authority: state_medicaid
       jurisdiction: TX
     dataset_name: Texas HHS-OIG Exclusions List
-    freshness_status: unknown
+    freshness_status: current
     known_limitations:
-    - npi is always null for this source; auto-link is prohibited for any match lacking
-      an exact identifier (CLAUDE.md Amendment 1)
     - "state exclusion is a SECONDARY label set \u2014 do not pool with federal LEIE/DOJ\
       \ into one precision number (CLAUDE.md Amendment 1)"
-    - 'blocked by source-side bot protection (HTTP client): Client error ''403 Forbidden''
-      for url ''https://oig.hhs.texas.gov/exclusions''
-
-      For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403;
-      requires Playwright MCP (plan M7), not yet wired'
-    license_or_terms: public domain (state government work)
+    - "obtained via OpenSanctions, which mirrors the Texas OIG's own source.xls \u2014\
+      \ both official OIG hosts are unreachable (oig.hhs.texas.gov WAF-blocks, oig.hhsc.state.tx.us\
+      \ times out at TCP). The publisher is the OIG; OpenSanctions is only the access\
+      \ provider"
+    - 'OpenSanctions data is CC-BY-NC 4.0: free for this project''s academic/research
+      use, but COMMERCIAL use of this source would require a paid licence. Phase 2
+      must re-source it if that changes'
+    - "npi is present on only 555 of 11948 rows (4.6%) \u2014 far sparser than FL;\
+      \ the great majority must route through entity resolution and may never auto-link\
+      \ (CLAUDE.md Amendment 1)"
+    - 'address is always null: this source carries no address column, so these rows
+      cannot contribute to address-cluster signals'
+    - "state_provider_number holds a professional LicenseNumber, NOT a Medicaid provider\
+      \ number \u2014 this file carries none. Do not compare it against FL/CA provider\
+      \ numbers"
+    - reinstated providers are filtered out on parse (ReinstatedDate non-null); the
+      workbook is a full history, not a current-state list
+    - "~17% of rows are reason-coded 'Federal mandated exclusion' and are federal\
+      \ LEIE exclusions mirrored into the state list \u2014 they OVERLAP the leie\
+      \ source. Ground-truth work must dedupe against LEIE rather than count them\
+      \ as independent state evidence (Amendment 1)"
+    license_or_terms: "CC-BY-NC 4.0 (OpenSanctions compilation of a public-domain\
+      \ state government work) \u2014 non-commercial use only"
     original_publisher: Texas Health and Human Services - Office of Inspector General
       (HHS-OIG)
-    retrieved_at: '2026-08-06T16:09:59.065912Z'
-    row_count: 0
+    retrieved_at: '2026-08-16T23:56:07.246423Z'
+    row_count: 11948
     schema_version: state-medicaid-v1
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: state_medicaid_tx
-    source_url: https://oig.hhs.texas.gov/exclusions
+    source_url: https://data.opensanctions.org/datasets/latest/us_tx_med_exclusions/index.json
   synthetic_exclusions:
     access_provider: ingest/synthetic.py
-    checksum_sha256: 647d307a103d49756e9e123b6a9691a00011a15fd858ededfbc66a9c2a699215
+    checksum_sha256: 24a8a499b77feeb3c39866526bd050aabf192a60cd6afe353d68150d263409d6
     coverage:
       scenarios: S05, S06, S10
     dataset_name: Synthetic Scenario Exclusions
@@ -148,15 +176,15 @@ sources:
     known_limitations: []
     license_or_terms: n/a (synthetic)
     original_publisher: Project Specter (generated)
-    retrieved_at: '2026-08-06T16:10:16.327104Z'
+    retrieved_at: '2026-08-16T23:56:15.951053Z'
     row_count: 4
     schema_version: 1.0.0
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: synthetic_exclusions
     source_url: generated:local
   synthetic_providers:
     access_provider: ingest/synthetic.py
-    checksum_sha256: 3802cc3e2022aad96d9ddce8aa517a10e9505f045a1ef5dcc3e3c64f5e36be43
+    checksum_sha256: 25cf1847ca6ae210a6a77b00a60896c0ee8ca92cc4ac31707c81bd115b7cbd94
     coverage:
       benign_controls: 150
       scenarios: S01-S10
@@ -168,9 +196,9 @@ sources:
       \ is deliberately empty for both."
     license_or_terms: n/a (synthetic)
     original_publisher: Project Specter (generated)
-    retrieved_at: '2026-08-06T16:10:16.323230Z'
+    retrieved_at: '2026-08-16T23:56:15.948324Z'
     row_count: 186
     schema_version: 1.0.0
-    snapshot_date: '2026-08-06'
+    snapshot_date: '2026-08-17'
     source_id: synthetic_providers
     source_url: generated:local

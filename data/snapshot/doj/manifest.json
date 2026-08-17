@@ -2,21 +2,22 @@
   "source_id": "doj",
   "dataset_name": "DOJ Press Releases (healthcare-fraud filtered)",
   "original_publisher": "U.S. Department of Justice",
-  "access_provider": "justice.gov RSS feed",
-  "source_url": "https://www.justice.gov/news/rss?type=press_release",
+  "access_provider": "justice.gov press-releases search (Playwright MCP)",
+  "source_url": "https://www.justice.gov/news/press-releases?keys=health+care+fraud",
   "license_or_terms": "public domain (U.S. Government Work)",
-  "snapshot_date": "2026-08-06",
-  "retrieved_at": "2026-08-06T16:09:57.992095Z",
-  "checksum_sha256": "39e77a4ca69d067f90379a293ab65ee209317fb67454e31651dbcc5d937f057c",
-  "schema_version": "doj-rss-2.0",
+  "snapshot_date": "2026-08-17",
+  "retrieved_at": "2026-08-16T23:55:09.188048Z",
+  "checksum_sha256": "60c59dd45068265cee8ecac60e101de49385270d2d6aa21a85e9fe47600498bd",
+  "schema_version": "doj-playwright-mcp-1.0",
   "coverage": {
     "topic_filter": "healthcare_fraud",
-    "window": "recent (~1-2 days)"
+    "pages_fetched": "1",
+    "fetch_method": "playwright_mcp"
   },
   "freshness_status": "current",
   "known_limitations": [
-    "RSS feed covers only a shallow recent window (~1-2 days); server-side topic/keyword filters are ignored by the feed, so filtering is done client-side against title+description",
-    "deep archive coverage (plan's ~300-500 release estimate) requires Playwright MCP against justice.gov/news, which is Akamai-protected against plain HTTP clients — deferred to M7"
+    "fetched via Playwright MCP (real headless Chromium — the search UI 403s to a plain HTTP client); `keys=`/`field_pr_topic=` are confirmed no-ops server-side (same list regardless of term), so the client-side title+description AND-filter is still authoritative, same as the RSS-based predecessor",
+    "deep archive coverage (plan's ~300-500 release estimate) is NOT reachable: page>=1 returns a hard Akamai 'Access Denied', confirmed live via direct navigation, a fresh session's first request, and a real click on the pager's own 'Page 2' link — not a request-construction bug, a site-side block. This connector's real universe is one page of the current recent-releases list, the same shape RSS already provided. See NOTES_API_DEVIATIONS.md."
   ],
   "row_count": 1
 }

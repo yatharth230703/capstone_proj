@@ -5,9 +5,9 @@
   "access_provider": "California Department of Health Care Services (DHCS)",
   "source_url": "https://data.chhs.ca.gov/api/3/action/package_show?id=8f70e05d-baa5-4296-a5ab-36318d530670",
   "license_or_terms": "public domain (state government work)",
-  "snapshot_date": "2026-08-06",
-  "retrieved_at": "2026-08-06T16:10:16.295514Z",
-  "checksum_sha256": "e541baa74e84032e93a74e6a2b88a94466bab6dc4f061f0c9c5e977fe257f5f2",
+  "snapshot_date": "2026-08-17",
+  "retrieved_at": "2026-08-16T23:56:15.938949Z",
+  "checksum_sha256": "60db303b23c84ff10d7cb35775071a593c03d05fdba096b1cab5c0b9499ae0bc",
   "schema_version": "state-medicaid-v1",
   "coverage": {
     "jurisdiction": "CA",
@@ -15,8 +15,8 @@
   },
   "freshness_status": "current",
   "known_limitations": [
-    "npi is always null for this source; auto-link is prohibited for any match lacking an exact identifier (CLAUDE.md Amendment 1)",
-    "state exclusion is a SECONDARY label set — do not pool with federal LEIE/DOJ into one precision number (CLAUDE.md Amendment 1)"
+    "state exclusion is a SECONDARY label set — do not pool with federal LEIE/DOJ into one precision number (CLAUDE.md Amendment 1)",
+    "npi is always null for this source; auto-link is prohibited for any match lacking an exact identifier (CLAUDE.md Amendment 1)"
   ],
-  "row_count": 23229
+  "row_count": 23310
 }

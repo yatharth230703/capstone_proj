@@ -5,9 +5,9 @@
   "access_provider": "ingest/synthetic.py",
   "source_url": "generated:local",
   "license_or_terms": "n/a (synthetic)",
-  "snapshot_date": "2026-08-06",
-  "retrieved_at": "2026-08-06T16:10:16.327104Z",
-  "checksum_sha256": "647d307a103d49756e9e123b6a9691a00011a15fd858ededfbc66a9c2a699215",
+  "snapshot_date": "2026-08-17",
+  "retrieved_at": "2026-08-16T23:56:15.951053Z",
+  "checksum_sha256": "24a8a499b77feeb3c39866526bd050aabf192a60cd6afe353d68150d263409d6",
   "schema_version": "1.0.0",
   "coverage": {
     "scenarios": "S05, S06, S10"

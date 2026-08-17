@@ -35,7 +35,8 @@ def test_row_count_mismatch_is_fail_even_if_fresh() -> None:
 
 
 def test_non_current_freshness_status_is_warn_not_fail() -> None:
-    # The real state_medicaid_fl/tx case (BUILD_MILESTONES.md D-1): row count
+    # The real state_medicaid_tx case (BUILD_MILESTONES.md D-1; FL was cleared
+    # 2026-08-17 and is now `current`, TX is still blocked): row count
     # honestly matches its manifest (0 == 0), but freshness_status is
     # "unknown" because the source is bot-blocked, not because of a real
     # data-integrity problem — that's a warning, not a halt.

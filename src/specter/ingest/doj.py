@@ -1,36 +1,60 @@
-"""DOJ press-release connector (plan §5.2).
+"""DOJ press-release connector (plan §5.2, M7 — narrows but does not fully
+clear debt D-2; see NOTES_API_DEVIATIONS.md and BUILD_MILESTONES.md §4).
 
-`justice.gov/news`'s own search UI is behind an Akamai JS challenge — `curl`
-gets only the challenge shell, confirmed live. The RSS feed at
-`justice.gov/news/rss?type=press_release` is unprotected and returns real
-items, but two things make it a *partial* source for M1, not the full one:
-it silently ignores topic/keyword query params (always the same generic
-latest-releases list), and it only carries a shallow recent window (~25 items
-covering a day or two), not the deep archive the plan's ~300-500 estimate
-implies. Client-side keyword filtering stands in for the ignored server-side
-filter; the deep archive is a plan §9.6/§14 Playwright MCP job (M7) — this
-connector's `known_limitations` says so explicitly rather than pretending
-today's thin feed is the whole picture.
+`justice.gov/news`'s own search UI is behind an Akamai JS challenge to a
+plain HTTP client — `curl` gets only the challenge shell, confirmed live.
+The RSS feed at `justice.gov/news/rss?type=press_release` is unprotected but
+only carries a shallow recent window (~25 items, a day or two) and silently
+ignores topic/keyword query params.
+
+**M7 fix, verified live: real rendering, not real depth.**
+`justice.gov/news/press-releases?keys=<terms>` renders fine through a real
+headless Chromium (`@playwright/mcp`) where `curl` gets only the Akamai
+challenge shell at the identical URL — genuine progress, not a workaround.
+But the deep archive this was meant to unlock is **not actually reachable**:
+`&page=1` (and every page beyond it) returns a hard Akamai "Access Denied",
+confirmed live three independent ways — direct navigation, a fresh session's
+very first request, and a real in-page click on the pager's own "Page 2"
+link (correct Referer, real click event, not a constructed URL). All three
+were blocked identically. `keys=`/`field_pr_topic=` are also confirmed
+no-ops server-side (the exact same ~12-item "most recent" list comes back
+regardless of the term), matching what the RSS feed's own query params
+already did. Net effect: this connector's real reachable universe is one
+page of DOJ's current recent-releases list, the same shape RSS already gave
+it, not the plan's ~300-500 estimate. `_is_healthcare_fraud` still filters
+client-side, same as before.
 """
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
+import json
 from datetime import UTC, date, datetime
-from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
-import httpx
 import polars as pl
 import structlog
 
 from specter.core.contracts import SourceConfig, SourceManifest, ValidationReport
 from specter.core.enums import FreshnessStatus, Verdict
 from specter.ingest.base import Connector
+from specter.tools.mcp_tools import evaluate_paginated_sync
 
 logger = structlog.get_logger(__name__)
 
-_RSS_URL = "https://www.justice.gov/news/rss?type=press_release"
+_PRESS_RELEASES_URL = "https://www.justice.gov/news/press-releases"
+_SEARCH_KEYWORDS = "health care fraud"
+# page>=1 is hard-blocked by Akamai regardless of navigation method (see
+# module docstring) — default is deliberately 1, not a bug. Left as a
+# constructor param, not hardcoded, in case the block is ever lifted.
+_DEFAULT_PAGES = 1
+
+_ROW_EXTRACTION_JS = """() => Array.from(document.querySelectorAll('.views-row')).map(r => ({
+  title: (r.querySelector('h2.news-title a')?.textContent || '').trim(),
+  link: r.querySelector('h2.news-title a')?.getAttribute('href') || null,
+  description: (r.querySelector('.field_teaser')?.textContent || '').trim(),
+  pub_date: r.querySelector('.node-date time')?.getAttribute('datetime') || null,
+}))"""
 
 _HEALTH_TERMS = (
     "health care",
@@ -56,37 +80,47 @@ class DojConnector(Connector):
     source_id = "doj"
     expected_columns = frozenset({"title", "link", "description", "pub_date", "guid"})
 
+    def __init__(self, pages: int = _DEFAULT_PAGES) -> None:
+        self.pages = pages
+
     def fetch(self, cfg: SourceConfig) -> Path:
         cfg.raw_dir.mkdir(parents=True, exist_ok=True)
-        out_path = cfg.raw_dir / "doj_raw.xml"
-        response = httpx.get(_RSS_URL, timeout=30.0, follow_redirects=True)
-        response.raise_for_status()
-        out_path.write_bytes(response.content)
-        logger.info("doj.fetch complete", size_bytes=len(response.content))
+        out_path = cfg.raw_dir / "doj_raw.json"
+
+        def page_url(page_index: int) -> str:
+            return f"{_PRESS_RELEASES_URL}?keys={quote_plus(_SEARCH_KEYWORDS)}&page={page_index}"
+
+        raw_rows = evaluate_paginated_sync(page_url, _ROW_EXTRACTION_JS, pages=self.pages)
+        out_path.write_text(json.dumps(raw_rows), encoding="utf-8")
+        logger.info("doj.fetch complete", pages=self.pages, raw_row_count=len(raw_rows))
         return out_path
 
     def parse(self, raw: Path) -> pl.DataFrame:
-        tree = ET.parse(raw)
+        raw_rows = json.loads(raw.read_text(encoding="utf-8"))
         rows = []
-        for item in tree.findall(".//item"):
-            title = (item.findtext("title") or "").strip()
-            description = (item.findtext("description") or "").strip()
+        for item in raw_rows:
+            title = (item.get("title") or "").strip()
+            description = (item.get("description") or "").strip()
             if not _is_healthcare_fraud(title, description):
                 continue
-            pub_date_raw = item.findtext("pubDate")
+            link = item.get("link")
+            absolute_link = (
+                f"https://www.justice.gov{link}" if link and link.startswith("/") else link
+            )
+            pub_date_raw = item.get("pub_date")
             pub_date = None
             if pub_date_raw:
                 try:
-                    pub_date = parsedate_to_datetime(pub_date_raw)
-                except (TypeError, ValueError):
+                    pub_date = datetime.fromisoformat(pub_date_raw.replace("Z", "+00:00"))
+                except ValueError:
                     pub_date = None
             rows.append(
                 {
                     "title": title,
-                    "link": item.findtext("link"),
+                    "link": absolute_link,
                     "description": description,
                     "pub_date": pub_date,
-                    "guid": item.findtext("guid"),
+                    "guid": absolute_link,
                 }
             )
         if not rows:
@@ -137,25 +171,33 @@ class DojConnector(Connector):
         report: ValidationReport,
     ) -> SourceManifest:
         known_limitations = [
-            "RSS feed covers only a shallow recent window (~1-2 days); server-side "
-            "topic/keyword filters are ignored by the feed, so filtering is done "
-            "client-side against title+description",
-            "deep archive coverage (plan's ~300-500 release estimate) requires "
-            "Playwright MCP against justice.gov/news, which is Akamai-protected "
-            "against plain HTTP clients — deferred to M7",
+            "fetched via Playwright MCP (real headless Chromium — the search UI 403s to a "
+            "plain HTTP client); `keys=`/`field_pr_topic=` are confirmed no-ops server-side "
+            "(same list regardless of term), so the client-side title+description "
+            "AND-filter is still authoritative, same as the RSS-based predecessor",
+            "deep archive coverage (plan's ~300-500 release estimate) is NOT reachable: "
+            "page>=1 returns a hard Akamai 'Access Denied', confirmed live via direct "
+            "navigation, a fresh session's first request, and a real click on the pager's "
+            "own 'Page 2' link — not a request-construction bug, a site-side block. This "
+            "connector's real universe is one page of the current recent-releases list, "
+            "the same shape RSS already provided. See NOTES_API_DEVIATIONS.md.",
         ]
         return SourceManifest(
             source_id=self.source_id,
             dataset_name="DOJ Press Releases (healthcare-fraud filtered)",
             original_publisher="U.S. Department of Justice",
-            access_provider="justice.gov RSS feed",
-            source_url=_RSS_URL,
+            access_provider="justice.gov press-releases search (Playwright MCP)",
+            source_url=f"{_PRESS_RELEASES_URL}?keys={quote_plus(_SEARCH_KEYWORDS)}",
             license_or_terms="public domain (U.S. Government Work)",
             snapshot_date=date.today(),
             retrieved_at=datetime.now(UTC),
             checksum_sha256=checksum,
-            schema_version="doj-rss-2.0",
-            coverage={"topic_filter": "healthcare_fraud", "window": "recent (~1-2 days)"},
+            schema_version="doj-playwright-mcp-1.0",
+            coverage={
+                "topic_filter": "healthcare_fraud",
+                "pages_fetched": str(self.pages),
+                "fetch_method": "playwright_mcp",
+            },
             freshness_status=FreshnessStatus.CURRENT,
             known_limitations=known_limitations,
             row_count=df.height,

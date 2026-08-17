@@ -5,9 +5,9 @@
   "access_provider": "CMS NPI Registry API",
   "source_url": "https://npiregistry.cms.hhs.gov/api/",
   "license_or_terms": "public domain (U.S. Government Work)",
-  "snapshot_date": "2026-08-06",
-  "retrieved_at": "2026-08-06T16:09:54.475761Z",
-  "checksum_sha256": "8644c1e19a3d0fb65587d7248995a35b5536009365093ed66b99295aa2be1fbd",
+  "snapshot_date": "2026-08-17",
+  "retrieved_at": "2026-08-16T23:54:57.632265Z",
+  "checksum_sha256": "419e0e0ff07495b5b5398a7139d261671b85b4509e982f8b973f5db33455ffb0",
   "schema_version": "npi-registry-api-2.1",
   "coverage": {
     "states": [
@@ -21,5 +21,5 @@
   "known_limitations": [
     "taxonomy_description is a fuzzy text match on the NPPES API; coverage is verified against the full NUCC '332' code table, not assumed from one query"
   ],
-  "row_count": 8417
+  "row_count": 8435
 }

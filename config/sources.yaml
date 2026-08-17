@@ -25,34 +25,104 @@ sources:
 
   doj:
     dataset_name: "DOJ Press Releases (healthcare-fraud filtered)"
-    source_url: "https://www.justice.gov/news/rss?type=press_release"
-    format: rss
-    access: live_http
+    source_url: "https://www.justice.gov/news/press-releases?keys=health+care+fraud"
+    format: rendered_html
+    access: live_playwright_mcp
     notes: >
-      RSS feed only, verified working. justice.gov/news's own search UI is
-      Akamai-protected (JS challenge, confirmed via direct fetch); the feed
-      ignores topic/keyword query params and only covers a shallow recent
-      window. Deep archive coverage requires Playwright MCP (plan M7).
+      M7: fetched via Playwright MCP (real headless Chromium) instead of the
+      RSS feed — justice.gov/news's search UI renders fine through a real
+      browser where curl gets only the Akamai challenge shell. Verified live
+      that this does NOT unlock a deeper archive though: page>=1 is hard
+      Akamai-blocked regardless of navigation method (direct nav, fresh
+      session, real pager-link click all confirmed blocked), and keys=/
+      field_pr_topic= are server-side no-ops (same ~12 most-recent releases
+      regardless of term). Real reachable universe is one page of the
+      current recent-releases list, same shape the RSS feed already gave.
+      See NOTES_API_DEVIATIONS.md D22, BUILD_MILESTONES.md §4 D-2.
 
   state_medicaid_fl:
-    dataset_name: "AHCA Medicaid Sanctioned/Terminated Provider List"
-    source_url: "https://ahca.myflorida.com/health-quality-assurance/office-of-medicaid-program-integrity"
-    format: unknown
-    access: blocked_needs_playwright
+    dataset_name: "Florida Medicaid Provider Master List (FLMMIS) - Ineligible providers"
+    source_url: "https://portal.flmmis.com/FLPublic/Portals/0/StaticContent/Public/Managed%20Care/prw19000.zip"
+    format: zip_csv
+    access: live_http
     jurisdiction: FL
+    retrieved: "2026-08-17"
+    row_count_live: 246
     notes: >
-      Verified HTTP 403 (Cloudflare) even with realistic browser headers.
-      Needs Playwright MCP (plan M7). Real column layout unknown until then.
+      CLEARED 2026-08-17 (D-1 closed for FL). Serves 246 ineligible FL
+      Medicaid providers, 220 of them with a real NPI.
+
+      Host swap, not a workaround: the originally-planned AHCA sanctions
+      list at ahca.myflorida.com is behind a zone-wide Cloudflare block that
+      a real headless Chromium does not get through either, and is no longer
+      referenced by the connector at all. portal.flmmis.com (the Florida
+      Medicaid Web Portal) is a different host with no WAF — plain httpx
+      gets a 200. Discovery path: the PML is linked from
+      portal.flmmis.com/FLPublic/Provider_ManagedCare/Provider_ManagedCare_Registration/tabId/77/Default.aspx?linkid=pml
+      and the ZIP filename is stable, so it is fetched directly.
+
+      This is an ENROLLMENT file, not a sanctions list — 17.8MB zipped, one
+      ~93.5MB / 458,905-row CSV of every enrolled FL Medicaid provider. The
+      exclusion signal is `Current Medicaid Enrollment Status` == 'E'
+      (Ineligible). The source states no reason for ineligibility, so these
+      may be administrative (failure to revalidate) rather than
+      fraud-related — weight below a federal OIG exclusion per Amendment 1.
+      There is no termination/action-date column, only enrollment
+      eligibility dates, so action_date is null rather than guessed.
+
+      CORRECTION to the earlier D21 note: the CSV is NOT malformed. Polars
+      1.43.2 parses all 458,905 rows cleanly; the reported ComputeError came
+      from parsing a truncated download as if it were complete. Parsing is
+      kept strict (hard rule 7) and _fetch_fl validates the ZIP's member
+      list before writing. Values are Excel-CSV-wrapped (`="000000900"`) and
+      unwrapped on parse. See NOTES_API_DEVIATIONS.md D21.
 
   state_medicaid_tx:
     dataset_name: "Texas HHS-OIG Exclusions List"
-    source_url: "https://oig.hhs.texas.gov/exclusions"
-    format: unknown
-    access: blocked_needs_playwright
+    source_url: "https://data.opensanctions.org/datasets/latest/us_tx_med_exclusions/index.json"
+    format: xls
+    access: live_http_mirror
     jurisdiction: TX
+    retrieved: "2026-08-17"
+    row_count_live: 11948
+    original_publisher: "Texas HHSC Office of Inspector General"
+    access_provider: "OpenSanctions"
+    license: "CC-BY-NC 4.0 — NON-COMMERCIAL ONLY"
     notes: >
-      Verified HTTP 403. The older oig.hhsc.state.tx.us domain times out
-      entirely. Needs Playwright MCP (plan M7).
+      CLEARED 2026-08-17 (D-1 closed for TX). 11,948 currently-excluded TX
+      providers.
+
+      Both official OIG hosts remain unusable and are NOT used:
+      oig.hhs.texas.gov WAF-blocks (Akamai "Access Denied", confirmed
+      against a real headless Chromium), and oig.hhsc.state.tx.us accepts no
+      TCP connection at all. Two other candidates were checked and rejected
+      this session: TMHP (www.tmhp.com, the Texas MMIS portal and the direct
+      analogue of FL's FLMMIS win) is reachable but hosts no file — it just
+      links back to the dead OIG host; and data.texas.gov's Socrata catalog
+      has no Medicaid exclusions dataset (searched exclusion/excluded/
+      sanction/terminated — zero relevant hits).
+
+      What works is OpenSanctions, which mirrors the OIG's own source.xls
+      and refreshes on the 1st and 15th. This is the publisher's file, not a
+      re-derivation, so original_publisher stays the Texas OIG. The artifact
+      URL embeds a mirror-run timestamp, so it is resolved from index.json
+      each run — same reason CA resolves through CKAN.
+
+      LICENCE WARNING: CC-BY-NC 4.0. Free for this project's academic use;
+      COMMERCIAL use would require a paid OpenSanctions licence. Phase 2 must
+      re-source if that changes.
+
+      Field notes: NPI is sparse (555/11,948, 4.6%) unlike FL's 89%, and
+      there is no address column at all — but StartDate is present on
+      essentially every row (a real action_date, which FL lacks) and
+      WebComments gives an exclusion reason distinguishing conviction from
+      board action from licence revocation. ReinstatedDate is a trap: the
+      workbook is a full history and ~11% (1,456 rows) are providers since
+      reinstated — filtered out on parse. state_provider_number holds a
+      professional LicenseNumber, NOT a Medicaid provider number.
+      ~17% of rows are "Federal mandated exclusion" and OVERLAP the leie
+      source — dedupe against LEIE for ground truth, do not double-count.
+      See NOTES_API_DEVIATIONS.md D21b.
 
   state_medicaid_ca:
     dataset_name: "DHCS Medi-Cal Suspended & Ineligible Provider (S&I) List"

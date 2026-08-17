@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Project Specter Phase 1 — multi-agent healthcare provider screening architecture"
 requires-python = "==3.11.*"
 dependencies = [
-    "google-adk==2.6.2",
+    "google-adk[mcp]==2.6.2",
     "litellm==1.95.0",
     "neo4j==6.2.0",
     "pydantic==2.13.4",
@@ -28,6 +28,7 @@ dependencies = [
     "arize-phoenix-otel==0.16.1",
     "opentelemetry-sdk==1.42.1",
     "opentelemetry-exporter-otlp==1.42.1",
+    "fastexcel==0.16.0",
 ]
 
 [dependency-groups]

@@ -17,3 +17,7 @@ data/ledger.sqlite
 data/evidence/
 data/cases/
 .secrets/
+
+# Playwright MCP's own run artifacts (screenshots, console logs) — written
+# to the cwd by @playwright/mcp, not source.
+.playwright-mcp/

@@ -475,3 +475,350 @@ logic, which currently assumes `_invoke`'s two return paths (cache hit / live
 call) are otherwise symmetric.
 
 ---
+
+## D18 — `google-adk`'s MCP support is an optional extra, not installed by default
+
+**Found:** M7, Step 0. **Affects:** `pyproject.toml`.
+
+`from google.adk.tools.mcp_tool.mcp_toolset import McpToolset` raised
+`ModuleNotFoundError: No module named 'mcp'` on a clean checkout, even
+though `google-adk==2.6.2` was already installed and every other ADK import
+worked. `importlib.metadata.distribution("google-adk").metadata.get_all(
+"Provides-Extra")` lists `mcp` among a dozen optional extras (`a2a`, `gcp`,
+`slack`, ...); the base install pulls none of them. Fix: `pyproject.toml`
+now pins `"google-adk[mcp]==2.6.2"` (was `"google-adk==2.6.2"`), which
+resolves `mcp>=1.24,<2` — landed as `mcp==1.29.0` via `uv sync`. `pip`/
+`python -m pip` are still not on PATH in this venv (M7's own Action Plan
+already flagged this) — `uv add`/`uv sync` is the only working install path.
+
+---
+
+## D19 — Neo4j Community Edition has no RBAC; read-only enforcement moves to session access mode
+
+**Found:** M7, live. **Affects:** `tools/mcp_tools.py`
+(`run_guarded_cypher`), `scripts/06_bootstrap_neo4j_readonly.py`. Narrows
+CLAUDE.md's "Neo4j MCP guardrails" §1 ("connect as the read-only role").
+
+`docker-compose.yml`'s Neo4j image is `neo4j:5.26.29-community`. Verified
+live: `SHOW ROLES` and `GRANT ROLE reader TO specter_ro` both raise
+`Neo.ClientError.Statement.UnsupportedAdministrationCommand` — role-based
+access control (`CREATE ROLE`, `GRANT`/`DENY` privileges) is an Enterprise
+Edition feature, not present in Community at all. `CREATE USER` **is**
+CE-supported and was used to create `specter_ro`
+(`scripts/06_bootstrap_neo4j_readonly.py`, idempotent via `IF NOT EXISTS`).
+
+The substitute for the missing role, and it's a real one, not merely
+app-level discipline: every guarded query opens its session with
+`driver.session(default_access_mode="READ")`. This **is** enforced by the
+server itself, independent of RBAC — verified live, a `CREATE` sent through
+such a session raises `Neo.ClientError.Statement.AccessMode: Writing in
+read access mode not allowed`. It is weaker than a true Enterprise
+read-only role (a procedure not correctly mode-tagged could in principle
+still write through it), which is exactly why the regex reject
+(`reject_unsafe_cypher`) stays as an independent second layer rather than
+being treated as redundant belt-and-suspenders. If this project ever moves
+to Neo4j Enterprise, replace `default_access_mode="READ"` with a real
+`GRANT MATCH {*} ON GRAPH * TO specter_ro` role and keep the regex layer
+regardless — CLAUDE.md's "all four are mandatory" wording doesn't carve out
+an exception for the case where one guardrail happens to be strong enough
+to make another redundant.
+
+---
+
+## D20 — `Session.run(**kwargs)` treats unrecognized kwargs as Cypher parameters, not transaction config
+
+**Found:** M7, live. **Affects:** `tools/mcp_tools.py` (`run_guarded_cypher`).
+
+`inspect.signature(Session.run)` is `(self, query, parameters=None,
+**kwargs)`; the docstring says outright: "kwargs: additional keyword
+parameters... take precedence over parameters passed as `parameters`." A
+first attempt at the guardrails' 10s timeout used `session.run(query,
+timeout=10)` — this does **not** raise, does **not** warn, and does
+**not** time anything out. Confirmed live: a query given `timeout=2` via
+this form ran to completion in 1.4s past a synthetic 8000×8000-row
+cartesian-product workload with no error, because `timeout` was silently
+treated as an unused Cypher parameter (the query didn't reference `$timeout`,
+so it was simply ignored).
+
+The real mechanism is `neo4j.Query(text, timeout=<seconds>)` passed as the
+query object itself (`session.run(Query(sql, timeout=10.0))`) — confirmed
+live to raise `Neo.ClientError.Transaction.
+TransactionTimedOutClientConfiguration` on an equivalent slow workload.
+`run_guarded_cypher` uses this form. Any future direct `session.run(...,
+timeout=...)` call anywhere else in this codebase is very likely the same
+silent no-op bug, not a working timeout — grep for it before trusting it.
+
+---
+
+## D21 — FL/TX state Medicaid sources are WAF-blocked even to a real browser (Playwright MCP does not unblock them)
+
+**Found:** M7, live. **Affects:** `ingest/state_medicaid.py`. Narrowed
+CLAUDE.md Amendment 1 / BUILD_MILESTONES.md debt D-1.
+
+> **UPDATE 2026-08-17 — FL is cleared; TX is not.** FL now ingests 246 real
+> ineligible providers from a different host (`portal.flmmis.com`). See
+> **D21a** below, which also **corrects a wrong diagnosis in this entry**: the
+> FLMMIS CSV is not malformed. Everything below about the *WAF blocks* stands
+> and is still why `ahca.myflorida.com` is unusable.
+
+The M7 build plan's own prescribed fix for a source blocked to a plain HTTP
+client is "needs Playwright MCP." Tried live against both FL and TX with a
+real headless Chromium (`@playwright/mcp`, `tools/mcp_tools.fetch_rendered`)
+and neither got through:
+
+- **FL** (`ahca.myflorida.com`): Cloudflare's block page (title "Attention
+  Required! | Cloudflare", body "Sorry, you have been blocked") — an
+  explicit security decision, confirmed after a 6s `browser_wait_for` (rules
+  out an unsolved JS challenge) and confirmed on a second distinct path
+  under the same host, not just the originally-diagnosed landing page —
+  i.e. a zone-wide block, not a page-specific one.
+- **TX** (`oig.hhs.texas.gov`): Akamai's block page (title "Access Denied",
+  body referencing `errors.edgesuite.net`) — same category of explicit WAF
+  decision. The older `oig.hhsc.state.tx.us` domain resolves via DNS
+  (`168.58.214.7`) but the TCP connection itself times out — not reachable
+  at the network layer at all, which no client-side technique (browser or
+  otherwise) can fix.
+
+Both are IP-reputation/WAF-policy blocks, not a JS-rendering gap — the
+server is making an explicit "no" decision that a more capable client
+doesn't change. `state_medicaid.py`'s `_fetch_blocked` now tries the
+Playwright path for real, every run (not skipped as "known dead"), and
+falls back to the pre-M7 plain-HTTP-then-empty-marker path when it's
+blocked, exactly as before. No further client-side workaround was
+attempted beyond this — techniques that specifically target defeating a
+site's explicit bot-management decision (IP rotation, residential proxies)
+are out of scope for a legitimate connector. D-1 stays open, narrowed: the
+plan's prescribed fix was implemented correctly and still doesn't clear it.
+
+**A real, unblocked FL alternative was found but not implemented — the
+concrete next step for whoever picks up D-1.** `portal.flmmis.com` (the
+Florida Medicaid Web Portal — a different host than the blocked
+`ahca.myflorida.com`, same pattern as CA's CKAN-vs-landing-page split) is
+**not** behind the same WAF: plain `curl` gets a real 200 and real content,
+no Playwright needed. Its "Provider Master List" (PML), linked from
+`portal.flmmis.com/FLPublic/Provider_ManagedCare/Provider_ManagedCare_
+Registration/tabId/77/Default.aspx?linkid=pml`, is a stable-named download
+(`.../StaticContent/Public/Managed%20Care/prw19000.zip`, ~17.8MB zipped,
+~93.5MB / 458,906-row CSV unzipped) that is genuinely usable as an
+exclusion proxy: it carries a **real NPI column** (rare among state
+sources — CA has none at all) and a `Current Medicaid Enrollment Status`
+column valued `A` (Active) / `I` (Inactive) / `E` (Ineligible). Filtering
+to `status == 'E'` gave ~265 rows on a crude live grep — a real, substantial
+FL exclusion signal, not the 0-row empty-marker path.
+
+**Why this session didn't wire it in:** the CSV appeared malformed in a way
+`pl.read_csv(..., truncate_ragged_lines=True)` didn't fix —
+`ComputeError: CSV malformed: expected 175 rows, actual 250 rows` on the
+first chunk. **This diagnosis was wrong — see D21a.** Values do come
+Excel-CSV-wrapped (`="000000900"` instead of a plain string) and need
+unwrapping. There is no explicit termination/action-date column — only
+enrollment eligibility dates — so `action_date` should be left `None` rather
+than guessing at a semantic that isn't actually recorded (hard rule 2).
+**TX has no equivalent alternate host found this session** — a quick check
+of `data.texas.gov`'s Socrata API didn't turn up an obvious exclusions
+dataset; a real search (the way CA's CKAN resource and FL's FLMMIS portal
+were both found) is still owed for TX.
+
+---
+
+## D21a — the FLMMIS CSV was never malformed; it was a truncated download. FL now ingests 246 real rows
+
+**Found:** 2026-08-17, live. **Affects:** `ingest/state_medicaid.py`,
+`config/sources.yaml`. **Clears D-1 for FL.** TX remains open.
+
+**The correction.** D21 above concluded the FLMMIS Provider Master List CSV
+had "misaligned fields... likely an unescaped quote or delimiter inside a
+name/address field somewhere in 458K rows," and scoped a tolerant-`csv`-module
+repair pass as the fix. That was wrong, and the scoped work was unnecessary.
+On a complete download, the file parses cleanly with no special handling at
+all:
+
+```
+pl.read_csv(path, infer_schema_length=0, encoding="utf8-lossy")  ->  (458905, 23)
+```
+
+Cross-checked against Python's `csv` module over all 458,905 rows: **zero**
+rows with a field count differing from the 23-column header, and no embedded
+newlines (physical line count matches record count exactly). Both readers
+agree the file is well-formed.
+
+The `expected 175 rows, actual 250 rows` error is what Polars reports when its
+chunked reader runs off the end of a file that stops mid-record — the
+signature of a truncated artifact, not of misaligned fields. The 17.8MB ZIP
+takes ~60s to fetch; the earlier attempt evidently parsed a partial copy.
+**Generalisable lesson:** a "malformed CSV" error on a large remote download is
+worth testing against a byte-count check before it is believed, because the
+repair work it implies is expensive and the truncation explanation is cheap to
+rule out.
+
+`_fetch_fl` therefore validates the artifact rather than tolerating it: it
+opens the ZIP (a short read raises `BadZipFile` immediately) and asserts
+exactly one CSV member before writing anything to disk. Parsing stays strict —
+adding `truncate_ragged_lines` now would be exactly the "fallback that masks a
+broken source" hard rule 7 forbids, and would have hidden this very bug.
+
+**What FL ingests now (live, 2026-08-17):**
+
+| | |
+|---|---|
+| CSV rows scanned | 458,905 |
+| `Current Medicaid Enrollment Status == 'E'` | 265 |
+| after collapsing redundant rows | **246** |
+| of those, carrying a real NPI | **220** (89%) |
+| `action_date` | null on all 246, by design |
+
+Status distribution across the whole file: `A` 290,076 / blank 140,657 /
+`I` 27,907 / `E` 265. The 140,657 blank-status rows are additional
+service-location rows for a provider whose enrollment fields sit on its
+primary row only; filtering to `E` excludes them, as intended.
+
+**The 265 -> 246 collapse.** 14 provider IDs carry more than one `E` row.
+Verified live: **none** of them differ in service address, and the duplication
+is a null-NPI enrollment segment shadowing a real-NPI one for the same
+provider. Those redundant rows are dropped. Rows are *not* deduped on provider
+ID alone, though — a provider listed under two genuinely different NPIs keeps
+both, since picking one would discard an identifier the source actually states.
+No provider in the current file is (verified: 0), but deduping on ID alone
+would silently lose it if one ever were, and the correct filter costs nothing.
+
+**Semantics worth stating plainly, because they limit what this source can
+support.** The PML is an *enrollment* file, not a published sanctions list.
+`E` means ineligible for Medicaid claims; the source gives **no reason**. An
+`E` may be administrative — failure to revalidate, a lapsed licence — and not
+fraud-related at all. Per Amendment 1 these must be weighted below a federal
+OIG exclusion and reported as a secondary label set, never pooled into one
+precision number. All six of these constraints are carried on the manifest's
+`known_limitations` so they travel with the data instead of living only here.
+`provider_type` is the raw FLMMIS Provider Type Code: no code->name table is
+published with the file, and inventing one is hard rule 2.
+
+**TX was still owed a search at the time of writing** — since done, and it
+succeeded. See D21b.
+
+---
+
+## D21b — TX cleared via a mirror of the publisher's own file, not an alternate host. D-1 fully closed
+
+**Found:** 2026-08-17, live. **Affects:** `ingest/state_medicaid.py`,
+`config/sources.yaml`, `pyproject.toml`. **Closes D-1.**
+
+**Three candidates checked, two rejected.** The FL win came from finding the
+state's MMIS portal on a different host, so Texas's exact analogue was tried
+first:
+
+| Candidate | Result |
+|---|---|
+| `www.tmhp.com` (Texas MMIS portal, FLMMIS's analogue) | reachable, HTTP 200 — **but hosts no file.** Its "Excluded Providers" page only links back to the dead OIG host |
+| `data.texas.gov` (Socrata) | reachable — **no Medicaid exclusions dataset.** Queried the catalog API for exclusion/excluded/sanction/terminated; zero relevant hits |
+| `oig.hhs.texas.gov` / `oig.hhsc.state.tx.us` | unchanged: Akamai block / no TCP connection |
+
+So the FL pattern does **not** generalise: Texas's MMIS portal genuinely
+doesn't publish the list. What worked instead is a different pattern — an
+aggregator that mirrors the publisher's own artifact.
+
+**The source.** OpenSanctions' `us_tx_med_exclusions` dataset carries a
+`source.xls` resource that is the Texas OIG's own workbook, mirrored rather
+than re-derived, refreshed on the 1st and 15th (last 2026-08-15). Because it
+is the publisher's file, `original_publisher` stays the Texas OIG and
+OpenSanctions is recorded only as `access_provider` — a distinction
+`SourceManifest` already models. The artifact URL embeds the mirror run's
+timestamp (`.../20260815045901-jzv/source.xls`), so it is resolved from the
+catalog `index.json` each run; hardcoding it would break at the next refresh.
+This is the same reasoning CA already uses with CKAN.
+
+**Licence — the one real cost, and it is recorded, not buried.** OpenSanctions
+data is **CC-BY-NC 4.0**. Non-commercial, academic and research use is free and
+explicitly permitted, which covers this project. Commercial use requires a paid
+licence. The underlying records are a public-domain state government work, but
+the stricter term is the one that binds, so `license_or_terms` on the TX
+manifest records the CC-BY-NC term rather than the friendlier one, and
+`known_limitations` says Phase 2 must re-source if the project is ever
+commercialised. The operator should know this was a deliberate trade, not an
+oversight.
+
+**What TX ingests (live, 2026-08-17):**
+
+| | |
+|---|---|
+| workbook rows | 13,404 |
+| reinstated, filtered out | 1,456 |
+| **current exclusions ingested** | **11,948** |
+| with an NPI | 555 (4.6%) |
+| with an `action_date` | 11,946 (~100%) |
+| `action_date` range | 1959-02-03 → 2026-07-28 |
+
+**`ReinstatedDate` is the trap in this source.** The workbook is a full
+*history*, not a current-state list. ~11% of its rows are providers who were
+excluded and have since been reinstated. Carrying them would manufacture false
+positives against providers in good standing — the most damaging error class
+this system can make — so they are dropped at parse and the count is logged.
+
+**How TX and FL differ, which matters for how they're used.** They are close to
+complementary, and neither is a substitute for the other:
+
+- **FL** — 89% NPI coverage and a real address, but **no action date and no
+  reason**. Strong for linking, weak for judging.
+- **TX** — a real exclusion date on essentially every row and a `WebComments`
+  reason that distinguishes "Conviction" from "Board action" from "License
+  revoked" (directly serving hard rule 6, which forbids collapsing
+  `legal_status`), but only 4.6% NPI and **no address column at all**. Strong
+  for judging, weak for linking.
+
+Two further TX-specific cautions, both on the manifest:
+`state_provider_number` holds a professional **LicenseNumber**, not a Medicaid
+provider number — this file carries none, so it must not be compared against
+FL/CA provider numbers. And **~17% of rows (2,075) are reason-coded "Federal
+mandated exclusion"** — these are federal LEIE exclusions mirrored into the
+state list, so they *overlap* the `leie` source. Ground-truth work must dedupe
+against LEIE rather than count them as independent state evidence, which is
+Amendment 1's "do not pool into one precision number" in a concrete form.
+
+**Dependency added:** `fastexcel==0.16.0`, needed because the artifact is a
+legacy `.xls` (CDFV2) that no already-installed library reads. Note that
+`polars.read_excel` currently emits a `FutureWarning` that its return type
+becomes a `Series` in Polars 2.0 — that would break `_parse_tx`. The warning is
+deliberately **not** suppressed, since it is a real forward-compatibility
+signal. Tracked as debt D-19.
+
+---
+
+## D22 — DOJ press-release pagination is hard-blocked regardless of navigation method; `keys=`/topic filters are server-side no-ops
+
+**Found:** M7, live. **Affects:** `ingest/doj.py`. Narrows BUILD_MILESTONES.md
+debt D-2 — attempted, not cleared; real number is unchanged from before M7.
+
+`justice.gov/news/press-releases?keys=<terms>` (page 0) renders correctly
+through Playwright MCP where `curl` at the identical URL gets only the
+Akamai challenge shell — real progress on the *rendering* problem. But
+`&page=1` (and presumably every page beyond it) returns a hard Akamai
+"Access Denied", confirmed live three independent ways, to rule out a
+request-construction bug on our side rather than a genuine site policy:
+
+1. Direct `browser_navigate` to the `page=1` URL.
+2. The exact same URL as the *very first* request of a brand-new isolated
+   session (rules out a bot-score building up over a session's request
+   history — the block is immediate, not cumulative).
+3. A real in-page `browser_click` on the rendered pager's own "Page 2"
+   link — correct `Referer` header, a genuine click event, not a
+   constructed URL. Blocked identically.
+
+Separately, `keys=` and `field_pr_topic[]=` are confirmed server-side
+no-ops: querying `health+care+fraud` vs. `field_pr_topic[]=Health+Care+
+Fraud` vs. no filter at all returns the *same* twelve most-recent releases
+every time (an unrelated Amazon/FCRA settlement and a forestry-ministerial
+statement both "matched" a health-care-fraud search) — this matches what
+the pre-M7 RSS feed's own docstring already documented for its query
+params, now confirmed true of the search UI too, not just the feed.
+
+Net effect: this connector's real reachable universe is one page of DOJ's
+current most-recent-releases list — the same shape the RSS feed already
+provided, not the plan's ~300-500 estimate. A live run on 2026-08-17
+returned exactly 1 matching row after the `_is_healthcare_fraud` filter,
+identical to the pre-M7 baseline the debt entry was written against. The
+gain is real (genuine rendering vs. a challenge shell, well-tested
+infrastructure for any future MCP fetch), but it did not move the number.
+A genuinely deeper DOJ archive would need a different official source
+entirely (e.g. a structured case dataset, not this press UI) — out of
+scope for this session; see BUILD_MILESTONES.md §4 D-2.
+
+---

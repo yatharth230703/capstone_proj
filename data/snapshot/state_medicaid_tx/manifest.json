@@ -2,22 +2,27 @@
   "source_id": "state_medicaid_tx",
   "dataset_name": "Texas HHS-OIG Exclusions List",
   "original_publisher": "Texas Health and Human Services - Office of Inspector General (HHS-OIG)",
-  "access_provider": "Texas Health and Human Services - Office of Inspector General (HHS-OIG)",
-  "source_url": "https://oig.hhs.texas.gov/exclusions",
-  "license_or_terms": "public domain (state government work)",
-  "snapshot_date": "2026-08-06",
-  "retrieved_at": "2026-08-06T16:09:59.065912Z",
-  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "access_provider": "OpenSanctions (mirror of the Texas OIG workbook)",
+  "source_url": "https://data.opensanctions.org/datasets/latest/us_tx_med_exclusions/index.json",
+  "license_or_terms": "CC-BY-NC 4.0 (OpenSanctions compilation of a public-domain state government work) — non-commercial use only",
+  "snapshot_date": "2026-08-17",
+  "retrieved_at": "2026-08-16T23:56:07.246423Z",
+  "checksum_sha256": "fe2e8f53489e1674283ffcb6d3c88df93232317fe247cab3cedbecd58d87b2ee",
   "schema_version": "state-medicaid-v1",
   "coverage": {
     "jurisdiction": "TX",
     "exclusion_authority": "state_medicaid"
   },
-  "freshness_status": "unknown",
+  "freshness_status": "current",
   "known_limitations": [
-    "npi is always null for this source; auto-link is prohibited for any match lacking an exact identifier (CLAUDE.md Amendment 1)",
     "state exclusion is a SECONDARY label set — do not pool with federal LEIE/DOJ into one precision number (CLAUDE.md Amendment 1)",
-    "blocked by source-side bot protection (HTTP client): Client error '403 Forbidden' for url 'https://oig.hhs.texas.gov/exclusions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403; requires Playwright MCP (plan M7), not yet wired"
+    "obtained via OpenSanctions, which mirrors the Texas OIG's own source.xls — both official OIG hosts are unreachable (oig.hhs.texas.gov WAF-blocks, oig.hhsc.state.tx.us times out at TCP). The publisher is the OIG; OpenSanctions is only the access provider",
+    "OpenSanctions data is CC-BY-NC 4.0: free for this project's academic/research use, but COMMERCIAL use of this source would require a paid licence. Phase 2 must re-source it if that changes",
+    "npi is present on only 555 of 11948 rows (4.6%) — far sparser than FL; the great majority must route through entity resolution and may never auto-link (CLAUDE.md Amendment 1)",
+    "address is always null: this source carries no address column, so these rows cannot contribute to address-cluster signals",
+    "state_provider_number holds a professional LicenseNumber, NOT a Medicaid provider number — this file carries none. Do not compare it against FL/CA provider numbers",
+    "reinstated providers are filtered out on parse (ReinstatedDate non-null); the workbook is a full history, not a current-state list",
+    "~17% of rows are reason-coded 'Federal mandated exclusion' and are federal LEIE exclusions mirrored into the state list — they OVERLAP the leie source. Ground-truth work must dedupe against LEIE rather than count them as independent state evidence (Amendment 1)"
   ],
-  "row_count": 0
+  "row_count": 11948
 }
