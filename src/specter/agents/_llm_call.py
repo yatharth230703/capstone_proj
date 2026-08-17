@@ -174,17 +174,28 @@ async def _invoke(
     cached_tokens = int(state.get(_STATE_CACHED_TOKENS, 0))
     completion_tokens = int(state.get(_STATE_COMPLETION_TOKENS, 0))
 
-    runtime.cache.set(
-        cache_key,
-        LlmResult(
-            content=final_text,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            model=tier.model,
-            latency_ms=latency_ms,
-        ),
-    )
+    # Validate before caching (BUILD_MILESTONES.md D-18): a transient
+    # truncated response must not poison this cache key for every future
+    # call that shares it. The ledger still records the call (and its real
+    # cost) even when validation fails — only the cache write is gated.
+    validation_error: AgentOutputError | None = None
+    try:
+        parsed = _validate_output(agent.name, final_text, output_schema)
+    except AgentOutputError as exc:
+        validation_error = exc
+
+    if validation_error is None:
+        runtime.cache.set(
+            cache_key,
+            LlmResult(
+                content=final_text,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
+                model=tier.model,
+                latency_ms=latency_ms,
+            ),
+        )
     runtime.ledger.record(
         LlmCallRecord(
             ts=datetime.now(UTC),
@@ -213,7 +224,9 @@ async def _invoke(
         escalated=escalated,
     )
 
-    parsed = _validate_output(agent.name, final_text, output_schema)
+    if validation_error is not None:
+        raise validation_error
+
     return (
         AgentRunResult(
             agent=agent.name,

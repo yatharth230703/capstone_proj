@@ -440,3 +440,109 @@ def test_run_agent_escalates_on_ambiguous_match_probability(
     assert result.escalated is True
     assert result.tier == "T2_reasoning"
     assert result.output["match_probability"] == pytest.approx(0.80)
+
+
+def test_run_agent_retries_transient_output_error(
+    monkeypatch: pytest.MonkeyPatch, runtime: AgentRuntime
+) -> None:
+    """`_invoke_with_retry` (BUILD_MILESTONES.md D23): a truncated/malformed
+    response is retried, not fatal on the first failure. Fails twice, then
+    a fresh call succeeds — mirrors the live finding (concurrent fan-out
+    truncates occasionally; a plain retry succeeds).
+    """
+    attempts: list[int] = []
+
+    async def flaky_invoke(
+        agent: Any,
+        task_class: str,
+        tier: TierConfig,
+        evidence: EvidenceBundle,
+        runtime_: AgentRuntime,
+        output_schema: type[Any],
+        *,
+        escalated: bool = False,
+    ) -> tuple[AgentRunResult, Any]:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise AgentOutputError("response was not valid JSON: Unterminated string")
+        payload = {
+            "verdict": "pass",
+            "per_source": [],
+            "blocking_reasons": [],
+            "recommended_action": "proceed",
+        }
+        parsed = output_schema.model_validate(payload)
+        result = AgentRunResult(
+            agent=agent.name,
+            task_class=task_class,
+            tier=tier.name,
+            model=tier.model,
+            output=parsed.model_dump(mode="json"),
+            prompt_tokens=0,
+            cached_tokens=0,
+            completion_tokens=0,
+            latency_ms=0.0,
+            cache_layer=CacheLayer.NONE,
+            escalated=escalated,
+            prefix_fingerprint="test",
+        )
+        return result, parsed
+
+    monkeypatch.setattr(agent_base, "_invoke", flaky_invoke)
+
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    evidence = EvidenceBundle(provider_npi="1000000000", evidence={}, task_instruction="test")
+    result = asyncio.run(
+        run_agent(agent, "assess_source_quality", evidence, runtime, DataQualityReport)
+    )
+
+    assert len(attempts) == 3
+    assert result.output["verdict"] == "pass"
+
+
+def test_run_agent_raises_after_exhausting_output_error_retries(
+    monkeypatch: pytest.MonkeyPatch, runtime: AgentRuntime
+) -> None:
+    """A source that is genuinely, persistently broken still fails loudly
+    (CLAUDE.md hard rule 7) — the retry has a bound, not an infinite loop.
+    """
+    attempts: list[int] = []
+
+    async def always_broken_invoke(
+        agent: Any,
+        task_class: str,
+        tier: TierConfig,
+        evidence: EvidenceBundle,
+        runtime_: AgentRuntime,
+        output_schema: type[Any],
+        *,
+        escalated: bool = False,
+    ) -> tuple[AgentRunResult, Any]:
+        attempts.append(1)
+        raise AgentOutputError("response was not valid JSON: Unterminated string")
+
+    monkeypatch.setattr(agent_base, "_invoke", always_broken_invoke)
+
+    agent = build_agent(
+        name="data_quality",
+        task_class="assess_source_quality",
+        instruction_file="data_quality.md",
+        tools=[],
+        output_schema=DataQualityReport,
+        runtime=runtime,
+    )
+    evidence = EvidenceBundle(provider_npi="1000000000", evidence={}, task_instruction="test")
+
+    with pytest.raises(AgentOutputError, match="not valid JSON"):
+        asyncio.run(
+            run_agent(agent, "assess_source_quality", evidence, runtime, DataQualityReport)
+        )
+
+    assert len(attempts) == agent_base._MAX_OUTPUT_ERROR_ATTEMPTS

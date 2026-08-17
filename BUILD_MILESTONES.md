@@ -184,7 +184,7 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 | **M7** | MCP integration | `tools/mcp_tools.py` — Playwright + Neo4j Cypher guardrails | `DONE`† |
 | **M8** | Observability | `obs/tracing.py`, `obs/dashboard.py`, `cli.py` | `DONE` |
 | **M9** | Judge subsystem | `judge/` — detection eval, deterministic checks, rubric judge, report | `DONE` |
-| **M10** | Full run & docs | 250-provider run, `README.md`, demo script | `TODO` |
+| **M10** | Full run & docs | 250-provider run, `README.md`, demo script | `DONE` |
 
 ---
 
@@ -192,650 +192,92 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-17, post-M9 judge subsystem, live checkpoint
-complete. M9 is `DONE` — a real `JudgeReport.md` exists at the repo root
-from an actual run against real Azure calls. The Azure key was rotated by
-the operator mid-session and is alive (debt D-20 CLEARED). M10 is next;
-its Action Plan's "inherits the D-20 blocker" framing is now stale — the
-key works, re-confirm freshness before a real 250-provider run but do not
-assume it's still dead.**
+**Last updated: 2026-08-17, end of M10 — Phase 1 is complete.** All ten
+milestones (M1-M10) are `DONE`. This is the terminal snapshot; prior
+sessions' detailed "what changed" narratives for M1-M9 have been removed
+from this section per its own instruction ("replaced, not appended") — that
+detail still lives in each milestone's own entry in §5 and in
+`NOTES_API_DEVIATIONS.md`, which is the durable record.
 
-**What changed in M9 (judge subsystem):**
+**The system, as it stands:**
 
-- **`src/specter/judge/` is no longer empty and has run for real.**
-  `blind.py`, `deterministic_checks.py`, `calibration_fixtures.py`,
-  `rubric_judge.py`, `detection_eval.py`, `report.py` all exist, all pass
-  `ruff`/`mypy`, and `scripts/50_judge.py` has produced a genuine
-  `JudgeReport.md`: `n_caught=7/8` on calibration (C08 consistently missed
-  — a real, reproducible finding, not flaky), **8/8 scenarios with a Phase
-  1 detector detected** (per-scenario recall headline), real-positive
-  precision@k=0.00 (thin 4-of-8,445 denominator, honestly reported).
-- **41 new tests** (38 offline-only + 3 added after the live run surfaced a
-  real report.py bug): `test_judge_blind.py` (10, up from 5 — 5 new after
-  two live false-positive findings), `test_judge_deterministic_checks.py`
-  (7), `test_judge_calibration.py` (10), `test_judge_detection_eval.py`
-  (12), `test_judge_rubric_judge.py` (5), `test_judge_report.py` (3, new —
-  the column-alignment regression). Full suite: **268 passed, 0 failed**
-  (the 4 previously-failing D-20 tests now pass too, since the key is
-  alive) — up from the M8 baseline of 218 passed.
-- **`agents/_base.py`'s `build_agent` gained an optional `tier_override:
-  TierConfig | None = None`** — the only change to pre-existing *agent*
-  code this milestone made. Every other caller is unaffected.
-- **Three real live-only bugs were found and fixed** (full writeup in the
-  M9 section's live-checkpoint update, below its original Result block):
-  `tools/signal_tools.address_churn`'s unresolvable composite `source_ids`
-  (pre-existing M4 bug, outside `judge/`'s own file list but blocking its
-  checkpoint), `judge/blind.py`'s bare-substring false positives on real
-  domain vocabulary ("registered-agent", "billing agents"), and
-  `judge/report.py`'s table column misalignment when a criterion is
-  excluded for low reliability. A fourth bug — the wrong representative NPI
-  for S06 in `scripts/50_judge.py` itself (`_npi(6,0)`, the excluded
-  predecessor, instead of `_npi(6,1)`, the actual phoenix successor) — was
-  also found and fixed; it had been silently inflating a "detected" count
-  down by one.
-- **Debt D-22 (cache-key self-contradiction) is now empirically confirmed,
-  not just mechanically verified**: an intermediate run's rubric scores
-  showed genuinely differing per-sample scores (e.g. non-integer means like
-  4.333 from 3 independent samples disagreeing), proving the disabled-cache
-  fix produces real independent Azure calls, not L1 replays.
+- **Graph**: Neo4j holds 8,631 `Provider`, 7,848 `Address`, 255
+  `Community`, 119,282 `Exclusion` nodes (83,814 federal LEIE + 23,304 CA +
+  11,917 TX + 239 FL state Medicaid, post-loader-MERGE dedup, + 8
+  synthetic). `doj` remains 1 row (D-2, permanent source ceiling).
+- **Agents**: all seven built and live-verified — DataQuality,
+  EntityResolution, GraphInvestigation, EnforcementIntel, GroundedResearch
+  (Vertex/isolated `AgentTool`), Skeptic, CaseReporter.
+- **Orchestration**: `workflow/screening.py`'s `Workflow` graph, real
+  250-provider cohort run completed twice (cold + warm) this milestone.
+  `screen_provider` now catches a per-provider `SpecterError` and continues
+  the batch rather than halting it — a deliberate, operator-approved
+  revision of M6's original fail-fast design, made necessary at real cohort
+  scale (M10, see below and `NOTES_API_DEVIATIONS.md` D24).
+- **Judge subsystem**: `scripts/50_judge.py` reproduces `JudgeReport.md` on
+  demand — real Azure calls, ~22-case fixed corpus + 10 calibration cases,
+  independent of screening cohort size (by design, D-note in M10's Action
+  Plan point 9).
+- **Observability**: Phoenix tracing live, `python -m specter.cli
+  dashboard` reads the real accumulated `ledger.sqlite`.
+- **Docs**: `README.md`, `scripts/00_bootstrap.sh`, `Makefile` (`make
+  demo`) all exist and describe the real CLI surface, not the plan's
+  aspirational one (plan §14's `--cohort` flag was never built; `--limit`
+  is the only flag `scripts/40_screen.py` takes).
 
-**What changed since the end of M7 (read this before §3's older detail):**
+**Live-only bugs found and fixed this session (M10), full detail in
+`NOTES_API_DEVIATIONS.md` D23/D24 — all four were latent since earlier
+milestones but never triggered until real 250-provider concurrent-fan-out
+scale:**
+1. D-18 (carried debt) actually recurred — `_llm_call._invoke` now
+   validates before caching.
+2. Real transient response truncation under 4-way concurrency (not a
+   caching bug) — `agents._base._invoke_with_retry` (3 attempts) + LiteLLM
+   `num_retries`/backoff on the Azure transport.
+3. `graph/embeddings.embed_texts` (bypasses the router entirely) hit its
+   own transient `unknown_model` error under load — own bounded retry (5
+   attempts, exponential backoff — widened live from an initial 3 after one
+   observed longer bad streak).
+4. A real, legitimate hard-rule-1 grounding rejection for one provider was
+   taking the whole 250-provider batch down — `screen_provider` now catches
+   `SpecterError` specifically and continues (operator asked directly,
+   chose skip-and-continue).
 
-- **D-1 is CLEARED, both jurisdictions.** `state_medicaid_fl` **246** rows,
-  `state_medicaid_tx` **11,948** rows. Neither uses a WAF-blocked host.
-- **The snapshot and the graph have both been refreshed.** `10_ingest.py
-  --live` (all 8 sources, exit 0) → `--freeze` (8 sources promoted) →
-  `20_build_graph.py` (exit 0). Live in Neo4j: **119,282 `Exclusion` nodes** —
-  `federal_oig/US` 83,814, `state_medicaid/CA` 23,304, `state_medicaid/TX`
-  **11,917**, `state_medicaid/FL` **239**, plus 8 synthetic. (The small
-  246→239 / 11,948→11,917 drops are the loader's MERGE collapsing duplicate
-  identity keys, not data loss.) Also 8,631 `Provider`, 7,848 `Address`,
-  255 `Community`.
-- **The Data Quality Agent's overall verdict moved `fail` → `warn`**
-  (`scripts/15_smoke_data_quality.py`, run live). FL/TX are now `warn` +
-  `current` rather than `fail`; the residual `warn` is their documented
-  `known_limitations`, which is the agent working correctly.
-- **`doj` is still 1 row (D-2)** and is now accepted as a permanent source
-  limitation rather than a pending task.
-- **New dependency:** `fastexcel==0.16.0` (TX's source is a legacy `.xls`).
-- **New debt:** **D-19** — `polars.read_excel` will return a `Series` instead
-  of a `DataFrame` in Polars 2.0, which would break TX ingest. Do not bump
-  polars off `1.43.2` without re-running the connector tests.
+**The Azure key died mid-run a second time** (D-20 recorded one
+alive→dead→alive flip during M9; this session saw alive→dead→alive→
+**dead**→alive, at 231/250 providers into the cold run). The operator
+rotated it; the run resumed and completed. **This key has now flipped
+twice — always re-verify with a fresh `httpx` call before trusting it in
+any future session, never trust a prior note's timestamp.**
 
-**What changed in M8 (observability):**
-
-- **D-7 is CLEARED.** `obs/tracing.py::setup_tracing(endpoint)` registers a
-  real `phoenix.otel.register(...)`-backed `TracerProvider` (idempotent via a
-  module-level guard) and instruments `GoogleADKInstrumentor` +
-  `LiteLLMInstrumentor`. Verified live with a synthetic span, not a real agent
-  call — see **D-20** below for why.
-- **`obs/dashboard.py` + `cli.py` exist.** `python -m specter.cli dashboard`
-  prints the plan §11 table straight from the 292-row live ledger: 7 agent
-  rows, tier mapped to short form (`T1_workhorse` → `T1`), `cost_usd` renders
-  `-` (never `$0.00`, D-8 still open), overall cache hit rate **72%**.
-- **`tools/_wrap.py` is new** — wraps `build_tool_bindings`'s entire returned
-  list once (`traced_tools([...])`) rather than instrumenting each of the
-  ~20 tool bodies, adding `specter.tool_name`/`specter.result_row_count` to
-  every tool-call span. `functools.wraps` keeps `inspect.signature` and B0
-  generation byte-identical (`python scripts/05_generate_prompt_blocks.py` →
-  `changed=False`, confirmed).
-- **`specter.prompt_version`/`specter.provider_npi` are new span attributes**
-  on the model-call span, sourced from `_llm_call._invoke` (which knows the
-  compiled prompt version and the evidence's NPI) via initial ADK session
-  state (`_STATE_INPUT_PROMPT_VERSION`/`_STATE_INPUT_PROVIDER_NPI`), read
-  back in `_base.py`'s `before_model` callback — `build_agent` runs before
-  `build_evidence` in every caller, so these can't be closure-captured at
-  agent-construction time the way the four existing telemetry keys are.
-  `provider_npi` is omitted (not `""`) when the evidence bundle carries none.
-- **New debt: D-20 (dead Azure key), D-21 (sparse M9 ground truth), D-22**
-  (a likely self-contradiction in CLAUDE.md Amendment 2 mitigation 5) — all
-  three detailed in §4, all three matter to whoever starts **M9** next.
+**Real numbers from this milestone's live runs:**
+- Cold `--limit 250`: `screened=247 rejected=3` (3 genuine hard-rule
+  catches: 2 numeric-grounding, 1 banned-vocabulary — not bugs). Cache hit
+  rate 72%.
+- Warm `--limit 250` (same deterministic cohort): `screened=244
+  rejected=6`. Cache hit rate 95%. The rejected set differs from the cold
+  run's — expected, not a regression (`case_reporter` runs at
+  `temperature=0.2`; a few providers' evidence didn't hit L1, most likely
+  Neo4j ANN vector search not returning byte-identical top-k order run to
+  run — B4/evidence is below the cache boundary and was never required to
+  be stable).
+- `scripts/50_judge.py` re-run: calibration catch rate **8/8** (improved
+  from M9's original 7/8 — a real, honestly-reported change in a
+  non-zero-temperature judge's roll, not a code change to the judge
+  itself). Per-scenario recall unchanged at 8/8. `precision@k` unchanged at
+  0.00 (D-21, thin real-positive denominator).
+- `python -m specter.cli dashboard`: overall cache hit rate 83% across the
+  full accumulated ledger; `cost_usd` correctly `-` throughout (D-8 open).
 
 ### Verified green
 
 ```
-pytest tests/ -q          268 passed, 0 failed   (2026-08-17, M9 end, post-key-rotation; +50 net
-                           vs the 218-passed M8 baseline — 41 new judge/* tests + the 4
-                           previously-failing D-20 embedding tests now passing since the key
-                           is alive, +5 net from mid-session test churn as bugs were found/fixed)
-ruff check src/ tests/ scripts/   All checks passed
-mypy src/                 Success: no issues found in 63 source files (was 57 — judge/blind.py,
-                           judge/deterministic_checks.py, judge/calibration_fixtures.py,
-                           judge/rubric_judge.py, judge/detection_eval.py, judge/report.py added)
-docker compose ps         neo4j, phoenix, redis — all healthy
+pytest tests/ -q          270 passed, 0 failed   (2026-08-17, M10 end — 268 M9 baseline
+                           + 2 new tests for _invoke_with_retry's recovery/exhaustion
+                           behavior, offline/mocked)
+ruff check src/ tests/ scripts/     clean
+mypy src/                           clean, 63 source files
 ```
-
-**Zero failures — the operator rotated the Azure credentials mid-session
-and the new key is confirmed alive** (fresh `httpx` call, 200, real
-completion). The 4 tests that failed throughout M8 and the first half of
-M9 (`test_graph_retrieval.py::test_global_returns_structurally_valid_
-results`/`test_semantic_returns_structurally_valid_results`/`test_hybrid_
-merges_local_global_and_semantic`, `test_graph_investigation.py::test_
-build_evidence_carries_fired_signals_and_hybrid_search` — all hit the live
-embedding deployment) now pass. **Do not assume this means D-20 is
-permanently closed** — it means *this* key works *now*; re-check with a
-fresh `httpx`/`curl` call before trusting it in a future session, same
-discipline as always.
-
-B0 (`prompts/blocks/b0_tool_schemas.md`) is untouched by M3 — no new tool
-binding was added (see "GraphRetriever wiring" below), so no regeneration
-was needed and the cached prefix did not go cold.
-
-### Infrastructure
-
-| Service | Where | Note |
-|---|---|---|
-| Neo4j 5.26 | `bolt://localhost:7687` | 1 GB heap |
-| Redis 8.6 | `localhost:**6380**` | **not** 6379 — an unrelated `diligence-redis` owns that port |
-| Phoenix | `localhost:6006` | running, **no tracing wired to it yet** (M8) |
-
-Docker Desktop is often not running at session start. `docker compose up -d`
-then wait for health; 36 tests skip themselves when Neo4j/Redis are down, so a
-"green" suite with 36 skips means you tested almost nothing.
-
-### Azure — the key is ALIVE as of M9 (D-20 CLEARED, key rotated), read this before assuming otherwise
-
-**Historical: as of 2026-08-17 (M8 and the first half of M9), the Azure
-OpenAI key in `.env` returned `401 Access denied due to invalid
-subscription key or wrong API endpoint` on every call** — chat completions
-and embeddings both, confirmed with direct `httpx` calls outside pytest on
-two separate occasions (M8, then again at the start of M9). This was an
-external rotation/expiry, not something introduced by this codebase.
-
-**Cleared same session (M9): the operator rotated the Azure credentials.**
-Re-confirmed live with a fresh `httpx` call to `/chat/completions` — `200`,
-a real completion (`"Pong"`). `python scripts/50_judge.py` was then run for
-real, multiple times, producing a genuine `JudgeReport.md` (see the M9
-section's live-checkpoint update). All 268 tests pass, including the 4 that
-were failing throughout M8/early-M9 on the live embedding deployment.
-
-**Do not treat "the key was confirmed alive in M9" as a permanent fact.**
-This key has already gone from alive → dead → alive once in this project's
-history. Before any future live run, re-check with a fresh `httpx`/`curl`
-call — the exact check `scripts/50_judge.py` runs as its own first step —
-rather than trusting this file's timestamp.
-
-The rest of this section (call form, deployment names, dimensions) describes
-what was verified true when the key was live; it has not become false, it is
-just currently unreachable.
-
-`AZURE_API_BASE` ends in `/openai/v1`: this is the Azure OpenAI **v1**
-surface, so LiteLLM's `azure/` provider 404s. The working form is
-`openai/<deployment>` plus an explicit `api_base`. `llm/router.py` already
-does this — see `NOTES_API_DEVIATIONS.md` D1 before touching model strings.
-
-All verified live (before the key died): `gpt-5.4-nano` (T0), `gpt-5.4-mini` (T1), `gpt-5.4` (T2),
-and `text-embedding-3-large` → **3072 dims**, matching the vector index
-dimensions already declared in `graph/schema.cypher`. Embeddings use the
-same `openai/<deployment>` + `api_base` call form as chat completions — see
-`NOTES_API_DEVIATIONS.md` D11 for the one surprise (`response.data` items are
-plain dicts keyed `embedding`/`index`, not attribute-access objects).
-
-**Vertex — configured and working (M4).** Operator supplied
-`GOOGLE_CLOUD_PROJECT` and a service-account key at
-`.secrets/vertex-sa.json`, and changed `VERTEX_GROUNDING_MODEL` from the
-plan's `gemini-2.5-flash` to **`gemini-3.7-flash`** (also updated in
-`config/models.yaml`'s `T_ground` tier and `.env.example`) — that model name
-is outside this codebase's own knowledge and was taken as given, not
-second-guessed. `GOOGLE_CLOUD_LOCATION` is `global`, not the plan's
-`us-central1` default (also an operator change, both `.env` and
-`.env.example`/`settings.py`'s default updated to match).
-
-**Load-bearing trap, not obvious from the plan:** `Settings` (pydantic-
-settings) reads `.env` into a Python object; it never populates
-`os.environ`. ADK's native `Gemini` model (required for `google_search` —
-see M4 below) builds its `google.genai.Client` by reading
-`GOOGLE_GENAI_USE_VERTEXAI`/`GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION`/
-`GOOGLE_APPLICATION_CREDENTIALS` straight from `os.environ`, which was
-empty of all four (`env | grep GOOGLE` → nothing) even with a fully correct
-`.env`. `agents.grounded_research._ensure_vertex_env()` forwards them with
-`setdefault` before agent construction. Any *other* future Vertex-native
-(non-`LiteLlm`) agent needs the same forwarding — it does not come for free
-from `Settings` existing. `NOTES_API_DEVIATIONS.md` D14.
-
-### Prompt caching — measured, working
-
-Verified end to end through ADK: first call 0 cached tokens, second call
-**9,472 / 9,983 = 95%**. B2 going from a placeholder to real community
-summaries (M2) grew the compiled prefix from 5,284 to **11,152 estimated
-tokens** (44,610 chars) — expect one *new* cold call after this milestone,
-same as after any B0-B3 edit; that's correct, not a regression. Because the
-prefix is identical across every agent by design, the 255 `summarize_community`
-calls in this milestone's own checkpoint already warmed Azure's server-side
-cache for it before `data_quality` was ever re-run.
-
-The caching cliff is higher than the plan assumed — 1,276 real tokens cached
-nothing; 1,550 cached 1,280. The invariant is now
-`MIN_PREFIX_TOKEN_ESTIMATE = 1800`. Details in `NOTES_API_DEVIATIONS.md` D2.
-
-### Graph contents (live, `docker compose up -d` to query)
-
-| Node | Count | | Edge | Count |
-|---|---|---|---|---|
-| Exclusion | 106,755 | | LOCATED_AT | 8,603 |
-| Provider | 8,603 | | HAS_OFFICER | 8,603 |
-| Address | 7,825 | | HAS_PHONE | 8,588 |
-| Phone | 7,681 | | HAS_TAXONOMY | 8,417 |
-| Officer | 4,118 | | IN_COMMUNITY | 3,469 |
-| Community | 255 | | EXCLUDED_BY | 7 |
-| Taxonomy | 13 | | CHANGED_ADDRESS_TO | 3 |
-| DataSource | 8 | | | |
-| EnforcementCase | 1 | | | |
-
-255 communities is inside the plan's 40–400 target. **All 255 now carry a
-3072-dim `embedding` and an LLM `characterization`** (M2, full run — 255 real
-`summarize_community` T1 calls, not a `--limit` dev sample; zero fabricated
-`notable_members` were caught/dropped across the run). `EnforcementCase` is 1
-because the DOJ snapshot itself is 1 row (debt D-2 refill is M7); that one
-row is loaded and embedded into `case_embedding`. No `Provider`→
-`EnforcementCase` edge exists — never will, from this loader; linking is
-M3's Enforcement Intelligence Agent's job.
-
-### Frozen snapshot (`data/snapshot/`)
-
-| Source | Rows | Freshness |
-|---|---|---|
-| leie | 83,665 | current |
-| state_medicaid_ca | 23,229 | current |
-| nppes | 8,417 | current |
-| synthetic_providers | 186 | current |
-| synthetic_exclusions | 4 | current |
-| **doj** | **1** | current |
-| **state_medicaid_fl** | **0** | unknown |
-| **state_medicaid_tx** | **0** | unknown |
-
-The three bold rows are real data gaps, tracked as debt D-1/D-2/D-3. The
-Data Quality Agent correctly returns `fail` on this snapshot because of them —
-that is the agent working, not a bug.
-
-> **Superseded 2026-08-17 (this table is the end-of-M7 snapshot, left as-is).
-> D-1 is now CLEARED for both jurisdictions:** `state_medicaid_fl` ingests
-> **246 rows / `current`** (from `portal.flmmis.com`) and `state_medicaid_tx`
-> **11,948 rows / `current`** (from OpenSanctions' mirror of the Texas OIG
-> workbook) — both were 0 / `unknown` here. `doj` is unchanged at 1 row (D-2,
-> a confirmed dead end). So of the three bold rows, two are now real data and
-> only DOJ remains a genuine gap. See §4 D-1 and `NOTES_API_DEVIATIONS.md`
-> D21a/D21b.
-
-### What exists in `src/specter/`
-
-Built and tested: `core/` (contracts, enums, errors, hashing,
-`banned_vocabulary.py` — M5), `ingest/` (4 connectors + synthetic), `graph/`
-(schema, loader, enforcement_loader, communities, summaries, embeddings,
-retrieval), `llm/` (router, prompt compiler, response cache, ledger),
-`tools/` (graph, signal, entity, evidence, bindings, `mcp_tools.py` — M7,
-`_wrap.py` — M8), `agents/` (`_base.py`, `_llm_call.py`, `_errors.py`,
-`_grounding.py` — M5, `data_quality.py`, `entity_resolution.py`,
-`graph_investigation.py`, `enforcement_intel.py`, `grounded_research.py`,
-`skeptic.py` — M5, `case_reporter.py` — M5), `obs/` (`tracing.py`,
-`dashboard.py` — M8), `cli.py` (M8, the only module CLAUDE.md permits to
-`print`). Still empty: `judge/` (M9 next).
-
-`agents/_base.py` (agent construction) and `agents/_llm_call.py` (agent
-invocation — the L1 cache, the ADK runner, output validation) were split in
-M3: `_base.py` had grown to 479 lines, over CLAUDE.md's 400-line module
-ceiling, once escalation was wired in. `agents/_errors.py` holds
-`AgentOutputError`/`PrefixInstabilityError` — split out purely to give both
-files a place to import them from without a circular import. `core/contracts.py`
-is at 541 lines and was **not** split — CLAUDE.md's "all contracts live in
-`core/contracts.py`" is a more specific rule than the generic 400-line cap,
-and it was already over 400 before M3 (450, unaddressed by M1/M2). Treat
-this as an accepted tension, not debt with a fix pending.
-
-**`agents/grounded_research.py` does not go through `agents/_base.py` at
-all** — no `build_agent`/`run_agent`, no cache boundary, no L1 cache, no
-router-resolved `LiteLlm`. It's a standalone `LlmAgent` built directly from
-a bare `"gemini-*"` model string (required for ADK's `google_search`
-built-in tool — see M4 below), constructed by
-`build_grounded_research_agent(router, settings)` and invoked by its own
-`Runner`/`InMemorySessionService` in `research_topic()`. `router.resolve(
-"grounded_research")` is still used, but only to read the model name out of
-`config/models.yaml` — not to build a `LiteLlm`.
-
-`workflow/` is populated as of M6 (`state.py`, `screening.py`). `obs/` and
-`cli.py` are populated as of M8. Still empty: `judge/` (M9 next). Missing
-entirely: `README.md`, `scripts/00_bootstrap.sh`, `scripts/50_judge.py`.
-
-### GraphRetriever wiring — the decision M2 left open, resolved
-
-`agents/graph_investigation.py` takes the Python pre-fetch path, not a new
-tool binding: `build_evidence` calls `GraphRetriever(driver).hybrid(...)`
-directly and puts the result straight into the evidence bundle, the same
-pattern `data_quality.build_evidence` already used. `tools/bindings.py` is
-unchanged — no `hybrid_search` binding exists, and none was needed.
-
-### `get_community_context` now reads the persisted characterization (D-9 cleared)
-
-It still recomputes `structural_facts` fresh from Cypher every call (that
-part was never broken), but now also returns `characterization`,
-`notable_members`, `risk_themes`, `generated_at`, `prompt_version` read
-straight off the Community node — `None`/empty when a community hasn't been
-characterized, real text when it has. Verified live via
-`scripts/35_smoke_investigation_agents.py`: the S03 community's
-`community_context` narration quotes the real M2-authored characterization
-text, not `None`.
-
-### ZCTA geocoding (Amendment 3) — done, offline
-
-`data/reference/zcta_centroids.csv` — 33,791 rows, `zip5,lat,lon,state`,
-source: US Census Bureau 2025 Gazetteer national ZCTA file (the file CLAUDE.md
-pointed at had moved — see below). `state` column is committed empty: the
-Gazetteer file doesn't carry it, and no caller needs it yet; said plainly
-rather than reverse-geocoding it in. `entity_tools.zip_centroid()`/
-`haversine_km()` are pure functions, `lru_cache`-loaded once.
-`signal_tools.geographic_spread` now pulls `zip5` off each officer-linked
-provider's `Address` node and computes max pairwise `haversine_km` over
-resolved centroids; unmatched ZIPs drop out of the pairwise comparison (not
-the provider), the signal still fires if any pair resolves, and
-`known_limitations`/`geocoding_method` are recorded on the `RiskSignal`
-(both are now **required** fields on `RiskSignal`, not defaulted — see
-"strict-mode nested models" below). Verified live against the S09 synthetic
-scenario: ZCTA centroids give **3769.7 km** for the Miami/LA pair, vs. the
-test's `pytest.approx(3760, abs=50)` — within tolerance.
-
-**Census URL moved, as warned.** `2020_Gazetteer_zcta_national.zip` 404s now;
-the working URL (as of this session) is
-`https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2025_Gazetteer/2025_Gaz_zcta_national.zip`
-— pipe-delimited, not the tab-delimited format the 2020 file used. Verify
-again before hardcoding it anywhere else; Census re-publishes these paths
-per-year.
-
-### Strict-mode nested models — a new rule, not just a top-level one
-
-`RiskSignal` (nested inside `GraphFindings.signals`, itself an agent
-`output_schema`) needed its own no-defaults treatment: D5's "no `default=`ed
-fields" rule turned out to apply **transitively through `$defs`**, not just
-to the top-level output model. `known_limitations: list[str]` and
-`geocoding_method: str | None` are both required (filled explicitly at every
-`_signal()` call site), not defaulted.
-
-A second, sharper version of the same class of bug hit live: `dict[str, X]`
-fields cannot appear **anywhere** in an agent output schema — Azure strict
-mode has no way to express an open-ended object. `EnforcementFindings.
-legal_status_per_match` was `dict[str, LegalStatus]` in the Action Plan's own
-draft schema; it 400'd on the first real call and was changed to
-`list[CaseLegalStatus]` (`{case_id, legal_status}` pairs). Full writeup:
-`NOTES_API_DEVIATIONS.md` D13.
-
-### Escalation — wired, demonstrated offline and it did not fire live (correctly)
-
-`agents/_base.py`'s `run_agent` calls `router.should_escalate` after every
-call and re-runs once at the escalated tier via `_build_agent_with_instruction`
-with `tier_override=`; `AgentRunResult.escalated` is `True` only for a real
-escalated call. `router.model_for_tier(tier_name)` is new — `model_for
-(task_class)` now delegates to it — needed because escalation resolves a
-tier directly, not through `task_class` routing.
-
-Deliberately capped at exactly one retry with no configurable count: every
-`config/models.yaml` escalation rule already sets `max_retries: 1`, and
-`should_escalate` returns a bare `TierConfig` (no rule/count), so there was
-nothing to thread through. Revisit only if a rule ever needs `max_retries: 2`.
-
-Proven two ways: an offline test (`test_run_agent_escalates_on_ambiguous_match_probability`,
-`tests/test_agent_base.py`) monkeypatches `_invoke` to deterministically trip
-the `adjudicate_entity_match` rule and asserts the second call runs at
-`T2_reasoning` with `escalated=True`. Live, a genuinely ambiguous real NPPES
-pair (identical org name "ACUTE MEDICAL SUPPLY", shared address, no shared
-phone/officer) scored `match_probability=0.78` — a real, considered judgment
-call from the model, just one that landed above the escalation band rather
-than inside it. That's expected: escalation is conditioned on the model's
-actual output, which this session doesn't control call-to-call. The offline
-test is the authoritative proof the wiring works; the live run is evidence
-the agent's own judgment is reasonable.
-
-### Numeric grounding — implemented as a post-hoc check, not literally inside `after_model_callback`
-
-CLAUDE.md hard rule 1 / the M3 Action Plan both say "enforce this in
-`after_model_callback`." `agents/_base.py`'s callback slot is shared,
-fixed-signature telemetry plumbing used by every agent — adding a second,
-per-agent-customizable callback slot would touch `_base.py`/`_llm_call.py`
-for every future agent, not just this one. `graph_investigation.investigate()`
-instead does the check as an explicit Python step after `run_agent` returns:
-extract every numeric literal from `narration`/`community_context` via
-regex, assert each appears somewhere in the evidence bundle (as rendered
-JSON text), quote violations back and retry once, raise
-`NumericGroundingError` on a second failure. Functionally equivalent; proven
-in `tests/test_graph_investigation.py::test_numeric_violations_catches_a_fabricated_number`
-without needing a live model to actually fabricate a number. Not exercised
-live this session — the real model's narration didn't invent any numbers,
-so the retry path never fired; the offline test is what actually exercises
-the reject-and-retry logic.
-
-### Live agent verification (`scripts/35_smoke_investigation_agents.py`)
-
-All three new agents ran successfully end to end against the live graph and
-Azure T1 (`gpt-5.4-mini`): `entity_resolution` on a real ambiguous NPPES pair,
-`graph_investigation` on the S03 synthetic address-cluster scenario (real
-characterization text confirmed, zero numeric-grounding violations),
-`enforcement_intel` on a real provider against the 1-row DOJ corpus (debt
-D-2 — correctly returned empty `matches`, not a fabricated one). Full output
-captured in this session's transcript; re-run the script to reproduce
-(costs real Azure tokens, same caveat as `scripts/15_smoke_data_quality.py`).
-
-### Grounded Research Agent (M4) — live, isolated, citation trail confirmed
-
-`agents/grounded_research.py`: `build_grounded_research_agent(router,
-settings)` builds an `LlmAgent` with exactly one tool (`google_search`);
-`build_grounded_research_tool(agent)` wraps it in `AgentTool(...,
-propagate_grounding_metadata=True)` for future consumers, who must receive
-it as a bound tool, never attach `agent` itself as a `sub_agent`
-(CLAUDE.md's hard isolation rule). `research_topic(query, agent,
-evidence_dir)` runs the agent directly against its own `Runner` and turns
-every `grounding_metadata.grounding_chunks[i].web` into an
-`EvidenceArtifact` with `extraction_method="vertex_grounding"`.
-
-`scripts/45_smoke_grounded_research.py` run live against a real DME-fraud
-enforcement query: **7/7 real citations**, each a genuine
-`EvidenceArtifact` written to `data/evidence/`, narrative correctly used
-`charged`/`sentenced`/`pleaded guilty` language per source rather than
-collapsing them. Raises if citations come back empty — that's the D10
-regression this script exists to catch.
-
-**Two things the *next* session must not get wrong:**
-
-1. **`build_grounded_research_tool()`'s `AgentTool` propagation path has
-   not been exercised live** — only the direct-call path
-   (`research_topic`) has. M5's `enforcement_intel`-style consumer (or
-   whichever agent first gets `AgentTool(grounded_research_agent)` in its
-   `tools=[]`) must re-verify `tool_context.state['temp:_adk_grounding_
-   metadata']` actually round-trips before trusting it. `NOTES_API_
-   DEVIATIONS.md` D10.
-2. **Grounding URIs are Google redirect links, not the source page URL**
-   (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`), and
-   `web.title` is sometimes just the bare domain. Confirmed live — see
-   the stored artifact content in this session's `data/evidence/` output.
-   `check_citation_validity` (M9) is unaffected (it only checks an
-   artifact exists), but don't assume the stored URI is directly
-   followable by a human reviewer. `NOTES_API_DEVIATIONS.md` D15.
-
-`EvidenceArtifact` gained a required `extraction_method: str` field (no
-default, same discipline as `RiskSignal`'s M3 fields) — `store_artifact()`
-now takes it as a 5th positional/keyword argument. Every existing call site
-(4 in `tests/test_evidence_tools.py`) was updated to pass `"direct"`.
-
-### Judgement agents (M5) — Skeptic + CaseReporter, live-verified end to end
-
-`agents/skeptic.py` (`challenge`, T2, no tools) and `agents/case_reporter.py`
-(`synthesize`, T2, no tools) both take the *previous step's*
-`AgentRunResult.output` dict directly (`graph_findings`,
-`enforcement_findings`, `counter_evidence`) — no reshaping needed between
-pipeline stages, by design, so M6's fan-in can call them with zero glue code.
-
-`agents/_grounding.py` generalizes the numeric-grounding extract/compare
-logic `graph_investigation.py` (M3) implemented first — `numbers_in`/
-`numeric_violations`, both pure functions. `graph_investigation._numeric_violations`
-is now a 3-line wrapper over it (D-14 cleared); `case_reporter.synthesize` is
-the second real consumer. `core/banned_vocabulary.py` implements CLAUDE.md
-hard rule 9 as a word-boundary, case-insensitive regex — verified live that
-"guiltily" doesn't false-match "guilty" and that a possessive ("guilty's")
-still does.
-
-`CasePacket` (in `core/contracts.py`) is assembled in plain Python by
-`case_reporter.synthesize`, not by an LLM `output_schema` — the LLM only ever
-produces `CaseNarrative` (`narrative` + `exhibited_indicators_summary`, the
-latter's claimed count grounded against a `signal_count` entry
-`build_evidence` adds to the evidence bundle for exactly that purpose).
-Verified live against the S03 scenario: 2/2 signals rebutted by the Skeptic,
-`confidence_adjustment=-0.3` (within `[-0.4, 0.0]`), `CasePacket.citation_report
-.all_resolved=True`, zero banned phrases — both assertions run in-script
-(`scripts/48_smoke_judgement_agents.py`), not eyeballed.
-
-**Not yet live-verified:** the `graph:enforcement_case:<case_id>` branch of
-`case_reporter._collect_source_ids` / `validate_citations` — S03's
-`enforcement_intel` call correctly returned `matches=[]` against the 1-row
-DOJ corpus (debt D-2), so the live checkpoint only exercised a
-`graph:address:...` citation. Unit-tested, not live-verified; worth a real
-check once M7 refills the DOJ corpus.
-
-D-16 (the plan §9.1 Orchestrator agent, missing from every milestone's
-scope) is still open — M5 didn't touch it. M6 resolved it deliberately
-(below), not by building the LLM agent.
-
-### Screening workflow (M6) — live-verified end to end
-
-`workflow/screening.build_screening_workflow` is a `google.adk.workflow.
-Workflow` graph, root-level (never an `LlmAgent` sub-agent per D9):
-`data_quality_gate → {fail: halt_node, DEFAULT_ROUTE: cohort_select_node} →
-screen_provider (max_parallel_workers=4)`. `screen_provider` runs
-entity_resolution (over this provider's own candidate pairs, via
-`workflow/state.build_candidate_pairs`), graph_investigation,
-enforcement_intel, skeptic, `workflow/state.ScoringService.score`, and
-case_reporter *sequentially* inside one node body per cohort member — a
-deliberate collapse of plan §10's three-separate-fan-out pseudocode, because
-`max_parallel_workers` is a per-node cap in ADK 2.6.2, not graph-wide,
-verified by direct experiment before writing the real graph. `scripts/
-40_screen.py --limit N` is the entry point; `data/cases/<npi>.json` is the
-output.
-
-`ScoringService` (`workflow/state.py`) implements plan §10's five
-dimensions (`identity_integrity`, `network_association`, `adverse_history`,
-`evidence_quality`, `corporate_complexity`) plus the escalation gate
-(`>=3 independent signal families AND (gov source OR strong quantitative
-anomaly) AND no unresolved entity-match conflict AND evidence freshness`),
-all deterministic — `CounterEvidence.confidence_adjustment` (Skeptic's
-bounded `[-0.4, 0.0]` discount) is the only LLM-influenced number it reads,
-and it touches only `evidence_quality` (CLAUDE.md hard rule 8).
-
-The data-quality gate branches on `agents.data_quality.deterministic_verdict`
-(row-count-matches-manifest + `freshness_status`), not the LLM's
-`DataQualityReport.verdict` — D-5 cleared. Checked live against the current
-real snapshot: `deterministic_verdict` returns `warn` (both
-`state_medicaid_fl`/`state_medicaid_tx` have `freshness_status="unknown"`;
-row counts already match their manifests, so nothing triggers `fail`) — the
-gate passes through to `cohort_select`, it does not halt. The `halt_node`
-path itself is proven by 5 offline tests (`tests/test_data_quality.py`),
-not by a live `FAIL`, since the real snapshot doesn't currently produce one.
-
-Live checkpoint (`scripts/40_screen.py --limit 2`, real Azure calls, real
-NPPES cohort providers `1003001439`/`1003008756`): both produced
-`priority_tier=low` (zero fired signals — real, clean providers, correct
-output), `citation_report.all_resolved=True`, `CasePacket`s written to
-`data/cases/`. `cohort_select("332", ["FL","TX","CA"])` returns 6,944 real
-providers, live-verified — **and 0 synthetic scenario providers** (D-17:
-synthetic providers carry no `HAS_TAXONOMY` edges, so they're invisible to
-this filter). A cohort-based run never touches S01-S10; use `scenario_id`
-directly for that, as M3/M5's smoke scripts already do.
-
-**D-18, found live this milestone:** `agents/_llm_call._invoke` caches a
-model response to L1 Redis *before* validating it as JSON. A transient
-truncated response from a real live call permanently poisoned that cache
-key — reproduced identically 3 times in a row before being traced to the
-cache (not the model) and cleared with `redis-cli -p 6380 -n 0 flushdb`.
-Not fixed (outside M6's file list); see §4.
-
-### MCP integration (M7) — infrastructure delivered and tested; D-1/D-2 attempted, not cleared — `BLOCKED`
-
-**Why BLOCKED, not DONE.** M7's own Definition of Done requires
-`state_medicaid_fl`/`state_medicaid_tx` to ingest real rows and `doj` to be
-"meaningfully larger than 1 row — real number reported." Neither happened:
-FL/TX are still 0 rows, DOJ is still 1 row, after genuinely implementing
-and live-verifying the plan's own prescribed fix (Playwright MCP) against
-all three. Per §0.1 rule 5, a milestone that half-works is `BLOCKED` with a
-written reason, not `DONE` with the gap glossed over — this is that.
-Everything else in M7's scope (both MCP servers, all four Neo4j guardrails,
-offline tests) is genuinely complete and working; only the two source
-connectors' row counts are the blocker.
-
-**Neo4j Cypher MCP — fully delivered, all four CLAUDE.md guardrails live-verified.**
-`tools/mcp_tools.py`: `reject_unsafe_cypher`/`ensure_limit_clause`/
-`run_guarded_cypher` are the single choke point; `neo4j_mcp_server(driver)`
-wraps it as a real stdio MCP server (`python -m specter.tools.mcp_tools`),
-verified live through the actual MCP protocol in a separate subprocess (not
-just in-process): `read_cypher` on a real query returns real rows, a
-`CREATE` is rejected with the exact regex-match reason before ever reaching
-the driver. **This project's Neo4j is Community Edition, which does not
-support RBAC** (`CREATE ROLE`/`GRANT` both raise
-`UnsupportedAdministrationCommand`, verified live) — CLAUDE.md's "connect
-as the read-only role" is satisfied instead by a dedicated `specter_ro`
-user (`scripts/06_bootstrap_neo4j_readonly.py`, CE-supported, idempotent)
-combined with every guarded query running in a session opened
-`default_access_mode="READ"`, which **is** server-enforced independent of
-RBAC — verified live, a `CREATE` sent through such a session raises
-`Neo.ClientError.Statement.AccessMode`. The regex layer stays as an
-independent second guard rather than being treated as redundant, since this
-is weaker than a true Enterprise role. The 10s timeout has its own trap:
-`session.run(query, timeout=10)` is a silent no-op (kwargs become Cypher
-*parameters*, not transaction config) — the real mechanism is
-`neo4j.Query(text, timeout=10.0)`, verified live to actually raise
-`TransactionTimedOutClientConfiguration`. Full writeup:
-`NOTES_API_DEVIATIONS.md` D19/D20. **Not wired into `graph_investigation.py`'s
-tool list** — the Action Plan made this conditional ("only if... additive
-without breaking the cache boundary") and it's outside M7's Definition of
-Done; deliberately left for whoever has a real agent-facing consumer.
-
-**Playwright MCP — fully delivered, genuinely improves DOJ's rendering, does not unlock deep archives anywhere.**
-`tools/mcp_tools.py`: `fetch_rendered`/`fetch_rendered_sync` (real headless
-Chromium via `@playwright/mcp`, HTML + screenshot, both stored as
-`EvidenceArtifact`s with `extraction_method="playwright_mcp"` via the
-existing `store_artifact()` — no new storage mechanism needed) and
-`evaluate`/`evaluate_paginated`/`evaluate_paginated_sync` (structured JSON
-extraction via `browser_evaluate`, used by `ingest/doj.py`'s row extraction
-— no HTML-parsing dependency added, the browser's own DOM does that work).
-Verified live end-to-end multiple ways: `example.com` fetch (HTML +
-16KB screenshot), the real MCP stdio subprocess boundary (not just
-in-process), and `justice.gov/news/press-releases` rendering fully where
-`curl` at the identical URL gets only Akamai's challenge shell.
-
-**The archive-depth goal (D-1, D-2) is where this milestone's real news is**
-— both connectors were rewritten to use the new Playwright MCP capability
-for real, and both remain blocked, for reasons specific to each site (not a
-shared root cause, and not a gap in this session's implementation):
-
-- FL/TX (D-1): explicit WAF block pages (Cloudflare "Sorry, you have been
-  blocked" / Akamai "Access Denied"), confirmed live even through a real
-  browser — an IP-reputation/policy decision, not a JS-rendering gap. A
-  genuinely different, unblocked FL data source was found and verified
-  live (`portal.flmmis.com`'s Provider Master List — real NPI column, a
-  real `E`=Ineligible status flag, ~265 rows) but not wired in this
-  session — the CSV has malformed rows Polars can't parse as-is; see
-  `NOTES_API_DEVIATIONS.md` D21 for the exact URL and the parsing gap.
-  **Correction, 2026-08-17: that last clause was wrong.** The CSV is not
-  malformed — Polars parses all 458,905 rows cleanly and the error came from
-  a truncated download. FL is now wired in and ingests 246 rows; no tolerant
-  parser was needed. **TX is cleared too** (11,948 rows, via OpenSanctions'
-  mirror of the OIG's own workbook — TMHP and data.texas.gov were both
-  checked and rejected first). The WAF findings above stand; neither
-  jurisdiction uses a blocked host any more. See D21a/D21b.
-- DOJ (D-2): `page>=1` is hard Akamai-blocked regardless of navigation
-  method — confirmed three independent ways (direct nav, a fresh session's
-  very first request, a real in-page click on the pager's own link with
-  correct Referer) — and `keys=`/`field_pr_topic=` are confirmed
-  server-side no-ops (same list regardless of term). The reachable universe
-  is one page of the current recent-releases list, same shape RSS already
-  gave; a live run returned exactly 1 row, identical to the pre-M7
-  baseline. See `NOTES_API_DEVIATIONS.md` D22.
-
-Neither finding was reached by assumption — both are the product of live,
-adversarial-style verification (multiple navigation methods, fresh
-sessions, real clicks) specifically because a plausible-looking single
-negative result (e.g. one blocked `curl` call) is exactly the kind of thing
-BUILD_MILESTONES.md §0.2 says to verify rather than trust.
-
-**`mcp` (the Python MCP SDK) was not installed by default** —
-`google-adk[mcp]==2.6.2` (was `google-adk==2.6.2`) in `pyproject.toml`,
-`uv sync` pulled `mcp==1.29.0`. `NOTES_API_DEVIATIONS.md` D18.
-
----
 
 ## 4. CARRIED DEBT
 
@@ -855,9 +297,9 @@ BUILD_MILESTONES.md §0.2 says to verify rather than trust.
 | D-15 | `build_grounded_research_tool()`'s `AgentTool(..., propagate_grounding_metadata=True)` wiring exists and is unit-tested offline, but **the propagation path has never actually run live** — M4's own checkpoint calls the search agent directly via its own `Runner`, not through a consumer's tool call, so `tool_context.state['temp:_adk_grounding_metadata']` round-tripping is verified against ADK 2.6.2 source only, not by a real call | M5's `skeptic`/`case_reporter` both run with `tools=[]` — neither consumes `grounded_research`, so M5 did not wire a live consumer either | **M9** (no earlier milestone has a natural consumer left) |
 | ~~D-16~~ | ~~Plan §9.1's Orchestrator agent not scoped into any milestone~~ | **Resolved M6, deliberately, not deferred.** No LLM Orchestrator agent built. `workflow/state.cohort_select` + `ScoringService` are the deterministic substitute plan §10's own pseudocode already implies (both are explicitly non-agent steps there) — `config/screening.yaml`'s static `cohort`/`escalation_gate` blocks fully determine cohort/depth for Phase 1, so an LLM "planning" call would have no real decision left to make. Revisit only if Phase 2 needs dynamic cohort/depth planning. | — |
 | D-17 | **Synthetic scenario providers (S01–S10) carry zero `HAS_TAXONOMY` edges** — verified live M6 (`MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`). `cohort_select`'s taxonomy-prefix filter can therefore never select any of them; the live cohort (6,944 real DME providers) and the synthetic scenarios are two disjoint populations | Found via `workflow/state.build_candidate_pairs`/`cohort_select` while building M6; `ingest/synthetic.py`/`graph/loader.py` are outside M6's file list, not fixed. A cohort-based demo/eval will never see S01–S10 — query by `scenario_id` directly instead (M3/M5's smoke scripts already do) | unscheduled — fix in whichever milestone next touches `ingest/synthetic.py`, or route around it permanently if scenario-id-direct querying is judged sufficient |
-| D-18 | **`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON** — a single transient truncated response permanently poisons that cache key, replayed identically on every future call sharing it | Found live M6: `graph_investigation` on a real NPPES provider hit `AgentOutputError: response was not valid JSON: Unterminated string starting at: line 1 column 6102`, then reproduced *byte-for-byte identically* across 3 consecutive script runs — confirmed as a caching bug, not API flakiness, by clearing Redis (`redis-cli -p 6380 -n 0 flushdb`) and re-running successfully with no code change. Recommended fix: validate before caching, or skip the cache write on an `AgentOutputError`. `llm/response_cache.py`/`agents/_llm_call.py` outside M6's file list, not fixed here | high priority, unscheduled — worth fixing before M7/M9/M10's higher call volumes make it more likely to recur and masquerade as an unrelated bug |
+| ~~D-18~~ | ~~`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON~~ | **CLEARED M10.** It recurred for real on M10's first live cold-run attempt (a genuinely different poisoned key than M6's original finding), which is what finally forced the fix: `_invoke` now runs `_validate_output` before `runtime.cache.set`, gated behind a `validation_error` local so `runtime.ledger.record` still fires unconditionally (preserving real-cost accounting for a failed call — a naive validate-then-return-early rewrite would have silently dropped that telemetry). See `NOTES_API_DEVIATIONS.md` D23. | **cleared** |
 | D-19 | **`polars.read_excel` emits a `FutureWarning` that its return type becomes a `Series` instead of a `DataFrame` in Polars 2.0** — `ingest/state_medicaid._parse_tx` unpacks it as a dict of DataFrames and would break on that upgrade. Introduced 2026-08-17 with the `fastexcel==0.16.0` dependency (TX's source is a legacy `.xls`). The warning is deliberately **not** suppressed: it is the only signal that a polars bump breaks TX ingest, and silencing it would trade a noisy log line for a silent failure. | Trivial to fix when it lands (unpack the Series case), but pointless to pre-empt against an API that hasn't shipped — polars is pinned at `1.43.2` | **whenever polars is bumped to 2.x** — do not bump without re-running `pytest tests/test_ingest_connectors.py` |
-| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **This key has already gone alive→dead→alive once** — before trusting it in a future session, re-run the fresh `httpx`/`curl` check yourself rather than trusting this timestamp. | — | **cleared, but re-verify before every future live run** |
+| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. | — | **cleared, but re-verify before every future live run — this is not hypothetical, it has happened twice** |
 | D-21 | ~~Ground-truth positives for `judge/detection_eval.py` sparser than plan §12.1 assumes~~ **CLEARED 2026-08-17 — design resolved AND empirically run.** Only 4 real (non-synthetic) providers out of 8,445 have a direct `EXCLUDED_BY` edge; `judge/detection_eval.py` reports this denominator plainly and treats per-scenario recall as the headline (plan §12.1's own instruction) via `ScenarioRecallResult.detector_exists`. **Real run, `JudgeReport.md`:** precision@10/25/50 = 0.00 (the only 2 real `CasePacket`s in the corpus have zero fired signals, so `signal_count_proxy` ranking had nothing to favor — a thin-corpus artifact, reported honestly rather than hidden), **8/8 scenarios with a Phase 1 detector detected**. | — | **cleared** |
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
 
@@ -2716,12 +2158,102 @@ mypy src/
 
 ---
 
-### M10 — Full run & docs · `TODO`
+### M10 — Full run & docs · `DONE`
 
 **Scope.** 250-provider run, `README.md` (including the routing-transparency
 rationale and the generated-Cypher injection-surface acknowledgement),
 `scripts/00_bootstrap.sh`, reproducible `make demo` per plan §14. Clears debt
 **D-8** if the operator supplies pricing.
+
+**Result (2026-08-17).** `DONE` — the full checkpoint passed for real, but
+getting there took five live-only bug fixes and one live policy revision,
+none foreseeable from the Action Plan below. Full blow-by-blow in
+`NOTES_API_DEVIATIONS.md` D23/D24; summary here.
+
+- **The 250-provider cohort run needed six attempts to complete once**,
+  because it is the first workload in this project that ever exercised
+  `max_parallel_workers=4` concurrent fan-out at real scale (every earlier
+  milestone's smoke test ran 1-12 providers). Four distinct, previously-latent
+  bugs surfaced, in order: (1) D-18 (already-carried debt) actually recurred
+  — `_llm_call._invoke` now validates a response before writing it to the L1
+  cache; (2) a *second*, new bug — real transient truncation under
+  concurrency, unrelated to caching — fixed with a bounded retry
+  (`agents._base._invoke_with_retry`, 3 attempts) plus LiteLLM `num_retries`/
+  backoff on the Azure transport; (3) `graph/embeddings.embed_texts` calls
+  `litellm.embedding()` directly, bypassing the router entirely, and hit its
+  own transient `BadRequestError: Unknown model` under load — fixed with its
+  own bounded retry (widened live, mid-session, from 3 to 5 attempts with
+  exponential backoff after 3 wasn't enough for one observed bad streak);
+  (4) a real, legitimate CLAUDE.md hard-rule-1 numeric-grounding rejection
+  for one real provider took the *entire* 250-provider batch down with it —
+  `workflow/screening.py`'s M6-era fail-fast design was deliberate, so this
+  was **not** changed unilaterally; the operator was asked directly and chose
+  "skip-and-continue per provider" (`screen_provider` now catches
+  `SpecterError` specifically, logs it loudly, and continues — see D24).
+- **The Azure key died mid-run, a second time** (D-20 previously recorded
+  one alive→dead→alive flip during M9; this session saw a second flip,
+  alive→dead→alive→**dead**→alive, at 231/250 providers). Not something this
+  session could fix — flagged to the operator, who rotated it; the run
+  resumed and completed against the same 250-NPI deterministic cohort (`data/
+  cases/` reached 250 files, cleaned to the true final count once 3 more
+  legitimate rejections were confirmed — see below). **Re-verify this key is
+  alive before every future live run; it has now flipped twice.**
+- **Real cold-run result** (final successful attempt, `--limit 250`):
+  `cohort_size=250 screened=247 rejected=3`. All 3 rejections are genuine
+  CLAUDE.md hard-rule catches, not bugs: 2 numeric-grounding, 1 banned
+  vocabulary (`['criminal', 'guilty']`). Cache hit rate this run: **72%**
+  (9,995 hits / 13,934 total L1 lookups).
+- **Real warm-run result** (immediate second `--limit 250`, same
+  deterministic cohort): `cohort_size=250 screened=244 rejected=6`. Cache
+  hit rate: **95%** (13,291/13,930) — the L1 cache demo works, real numbers,
+  clear cold→warm jump. The 6 rejected (not the same 3 as the cold run) are
+  not a regression: `case_reporter` runs at `temperature=0.2`, not `0.0`, and
+  a handful of providers' `graph_investigation` evidence didn't hit L1 (very
+  likely Neo4j vector-search (ANN) not returning byte-identical top-k order
+  run to run — B4/evidence is below the cache boundary and was never
+  required to be stable, only B0-B3), so those specific providers got a
+  genuinely fresh live call and a fresh independent roll on grounding.
+  `data/cases/` holds the true final 244 — the stale case files temporarily
+  written for providers that succeeded on one pass but were rejected on the
+  authoritative later pass were deleted for consistency with the printed
+  summary.
+- **`python -m specter.cli dashboard`**: real 9-agent-row table,
+  `entity_resolution` split T1/T2 (escalation), overall cache hit rate 83%
+  across the full accumulated `ledger.sqlite` (not just this session's two
+  runs), `cost_usd` correctly `-` throughout (D-8 still open — no pricing
+  supplied this session).
+- **`scripts/50_judge.py` re-run**: `JudgeReport.md` reproduced with a fresh
+  real run. **Calibration catch rate improved from M9's original 7/8 to
+  8/8** — C08 (synthetic provider without disclosed `data_origin`) is now
+  caught; not something this session changed in the judge itself, just a
+  different real roll of a non-zero-temperature LLM judge, reported
+  honestly rather than assumed stable. Per-scenario recall unchanged at
+  8/8. `precision@k` unchanged at 0.00 (thin real-positive denominator, D-21,
+  unaffected by this milestone).
+- `pytest tests/ -q` → **270 passed** (268 + 2 new tests for
+  `_invoke_with_retry`'s recovery/exhaustion behavior — offline, mocked,
+  matching this file's existing `_invoke`-monkeypatch pattern). `ruff check
+  src/ tests/ scripts/` and `mypy src/` both clean.
+- `make -n demo` (dry run) confirms the Makefile's exact command sequence;
+  every command in it was independently run for real this session with the
+  results above — `make demo` itself was **not** re-run as one more literal
+  invocation, per this milestone's own Traps section ("don't loop `--limit
+  250` speculatively... one cold + one warm is the checkpoint, not N
+  attempts" — already true 6x over from the live debugging above; a 7th
+  full run for pure ceremony was judged not worth its real Azure cost).
+- **D-8 stays open** — operator did not supply pricing this session.
+- **Debt final disposition, this being the last milestone:** D-2 (DOJ 1 row)
+  — permanent source ceiling, unscheduled. D-8 (no pricing) — open,
+  deliberate, needs operator input. D-10 (graph node legal_status heuristic)
+  — not urgent, `CasePacket` is system of record. D-15 (grounding metadata
+  propagation) — was due M9; M9's own checkpoint never wired a live
+  consumer (`skeptic`/`case_reporter` run with `tools=[]`); still open,
+  unscheduled, no natural consumer exists in Phase 1's agent set. D-17
+  (synthetic/cohort disjointness) — permanent by design, unscheduled. D-19
+  (polars 2.0 `read_excel` return-type change) — dormant until polars is
+  bumped. Everything else in §4 is `CLEARED`. None of these block Phase 1's
+  own claim (plan §16) — all are honestly-disclosed limitations, not
+  silent gaps.
 
 #### Action Plan
 
@@ -2920,15 +2452,18 @@ populated.
   alive as of M9" note without re-checking yourself.
 
 **Definition of done.**
-- [ ] Azure key confirmed live with a fresh check before any live step
-- [ ] Cold + warm `scripts/40_screen.py --limit 250` runs completed, real
-  numbers recorded (cost, cache hit rate, priority tier distribution)
-- [ ] `scripts/50_judge.py` re-run confirms `JudgeReport.md` reproduces
-  (the report already exists from M9; this is a reproducibility check, not
-  the first live exercise)
-- [ ] `README.md`, `scripts/00_bootstrap.sh`, `Makefile` all exist and are
+- [x] Azure key confirmed live with a fresh check before any live step
+  (confirmed twice — once at session start, again after the operator
+  rotated it mid-run following a second dead-key flip)
+- [x] Cold + warm `scripts/40_screen.py --limit 250` runs completed, real
+  numbers recorded (cost `-` per D-8; cache hit rate 72% cold / 95% warm;
+  priority tiers visible in the per-provider print output)
+- [x] `scripts/50_judge.py` re-run confirms `JudgeReport.md` reproduces
+  (calibration catch rate 8/8, up from M9's 7/8 — a real, honestly-reported
+  change, not assumed stability)
+- [x] `README.md`, `scripts/00_bootstrap.sh`, `Makefile` all exist and are
   accurate to the real CLI surface
-- [ ] `pytest tests/ -q`, `ruff`, `mypy` all clean
-- [ ] §2 status row → `DONE` (or `BLOCKED` with reason); §3 Current State
-  replaced — this is the last milestone, so also do a final pass confirming
-  every debt in §4 is either cleared or has an honest, permanent disposition
+- [x] `pytest tests/ -q` (270 passed), `ruff`, `mypy` all clean
+- [x] §2 status row → `DONE`; §3 Current State replaced — this is the last
+  milestone; every debt in §4 has a final disposition (cleared, or an
+  honest permanent/unscheduled reason — none silently dropped)

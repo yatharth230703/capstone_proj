@@ -234,6 +234,29 @@ def _build_agent_with_instruction(
     )
 
 
+_MAX_OUTPUT_ERROR_ATTEMPTS = 3
+
+
+async def _invoke_with_retry(
+    agent: LlmAgent,
+    task_class: str,
+    tier: TierConfig,
+    evidence: EvidenceBundle,
+    runtime: AgentRuntime,
+    output_schema: type[BaseModel],
+) -> tuple[AgentRunResult, BaseModel]:
+    """`_invoke`, retried up to `_MAX_OUTPUT_ERROR_ATTEMPTS` times on
+    `AgentOutputError` — see `run_agent`'s docstring for why this exists."""
+    last_error: AgentOutputError | None = None
+    for _attempt in range(_MAX_OUTPUT_ERROR_ATTEMPTS):
+        try:
+            return await _invoke(agent, task_class, tier, evidence, runtime, output_schema)
+        except AgentOutputError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
 async def run_agent(
     agent: LlmAgent,
     task_class: str,
@@ -247,6 +270,19 @@ async def run_agent(
     L1 cache hit short-circuits the entire ADK invocation. On a miss the call
     runs, is recorded to the ledger, and the result is stored for next time.
 
+    A malformed/truncated response (`AgentOutputError`) is retried up to 2
+    extra times before propagating — found live in M10: `workflow/screening.
+    py`'s `max_parallel_workers=4` fan-out produces occasional truncated
+    responses that a sequential single-worker run never hits (16 sequential
+    calls: 0 failures; the same 16 at 4-way concurrency: 2 failures), and a
+    plain retry of the identical call succeeds (same empirical pattern as
+    BUILD_MILESTONES.md D-18's original finding). litellm's own `num_retries`
+    (`llm/router.py`) does not cover this — that retries on a raised
+    transport exception (429/5xx), but a truncated-but-200 response isn't
+    one. This is a fresh independent call each attempt, not a replay of
+    cached content, so it does not mask a broken source (CLAUDE.md hard rule
+    7): if all 3 attempts truncate, the last error still propagates.
+
     After a successful parse, `router.should_escalate` checks the result
     against `config/models.yaml`'s escalation rules. A match re-runs the same
     evidence through the same agent rebuilt at the escalated tier — capped at
@@ -256,7 +292,9 @@ async def run_agent(
     than retrying again (CLAUDE.md hard rule 7).
     """
     tier = runtime.router.resolve(task_class)
-    result, parsed = await _invoke(agent, task_class, tier, evidence, runtime, output_schema)
+    result, parsed = await _invoke_with_retry(
+        agent, task_class, tier, evidence, runtime, output_schema
+    )
 
     escalated_tier = runtime.router.should_escalate(task_class, parsed)
     if escalated_tier is None:

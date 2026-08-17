@@ -188,6 +188,14 @@ class ModelRouter:
         return {
             "api_base": self._settings.azure_api_base,
             "api_key": self._settings.azure_api_key.get_secret_value(),
+            # CLAUDE.md code style: "Concurrency capped at 4 parallel
+            # providers. Exponential backoff on 429." — litellm's own
+            # retry handles this (tenacity under the hood); found live in
+            # M10 that 4-way concurrent fan-out (`max_parallel_workers=4`
+            # in workflow/screening.py) produces transient truncated/failed
+            # responses that a sequential single-worker run never hits.
+            "num_retries": 3,
+            "retry_strategy": "exponential_backoff_retry",
         }
 
     def should_escalate(self, task_class: str, result: BaseModel) -> TierConfig | None:

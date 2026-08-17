@@ -3,25 +3,25 @@ The rubric judge (gpt-5.4) shares a model family with the agents it grades,
 introducing self-preference bias. LLM rubric scores are therefore reported as
 SECONDARY. Primary evaluation is deterministic (citation validity, numeric
 grounding, entity existence) and does not involve an LLM.
-Judge accuracy on injected-defect calibration cases: 7/8.
+Judge accuracy on injected-defect calibration cases: 8/8.
 Cross-family validation (Kimi K2.6 or Claude) deferred to Phase 2.
 
 ## Deterministic checks (PRIMARY)
 
 | Provider NPI | citations OK | numbers OK | entities OK |
 |---|---|---|---|
-| 1003001439 | 0/0 | 15 violations | 3/3 |
-| 1003008756 | 0/0 | 18 violations | 3/3 |
+| 1003001439 | 0/0 | 19 violations | 4/4 |
+| 1003008756 | 0/0 | 55 violations | 48/48 |
 | 9010000000 | 0/0 | 21 violations | 4/4 |
-| 9020000000 | 1/1 | 10 violations | 3/3 |
-| 9030000000 | 2/2 | 5 violations | 1/2 |
-| 9040000000 | 1/1 | 8 violations | 2/3 |
-| 9050000000 | 3/3 | 4 violations | 1/3 |
-| 9060000001 | 3/3 | 9 violations | 2/3 |
-| 9070000000 | 1/1 | 20 violations | 4/4 |
+| 9020000000 | 1/1 | 0 violations | 1/1 |
+| 9030000000 | 2/2 | 6 violations | 1/2 |
+| 9040000000 | 1/1 | 17 violations | 7/8 |
+| 9050000000 | 3/3 | 0 violations | 1/2 |
+| 9060000001 | 3/3 | 8 violations | 2/5 |
+| 9070000000 | 1/1 | 1 violations | 1/1 |
 | 9080000000 | 0/0 | 11 violations | 2/2 |
-| 9090000000 | 1/1 | 5 violations | 3/3 |
-| 9100000000 | 2/2 | 2 violations | 1/2 |
+| 9090000000 | 1/1 | 2 violations | 3/3 |
+| 9100000000 | 2/2 | 0 violations | 1/3 |
 
 ## Detection evaluation
 
@@ -57,52 +57,62 @@ Ranking method: `signal_count_proxy`.
 - **C01** (Citation pointing to a non-existent artifact ID): expected criterion `citation_validity` mean score 0.0 — CAUGHT
 - **C02** (A number absent from every tool result): expected criterion `numeric_grounding` mean score 1.0 — CAUGHT
 - **C03** ("convicted" used where source says "charged"): expected criterion `legal_discipline` mean score 0.0 — CAUGHT
-- **C04** (Counter-evidence section empty): expected criterion `counter_evidence` mean score 1.6666666666666667 — CAUGHT
-- **C05** (A fabricated NPI in linked entities): expected criterion `hallucination` mean score 0.3333333333333333 — CAUGHT
+- **C04** (Counter-evidence section empty): expected criterion `counter_evidence` mean score 2.0 — CAUGHT
+- **C05** (A fabricated NPI in linked entities): expected criterion `hallucination` mean score 0.0 — CAUGHT
 - **C06** (Banned word 'fraudulent' in the narrative): expected criterion `legal_discipline` mean score 0.0 — CAUGHT
-- **C07** (Two signals from one underlying fact, weighted twice): expected criterion `numeric_grounding` mean score 1.6666666666666667 — CAUGHT
-- **C08** (Synthetic provider presented without disclosed data_origin): expected criterion `citation_validity` mean score 3.0 — MISSED
+- **C07** (Two signals from one underlying fact, weighted twice): expected criterion `numeric_grounding` mean score 1.0 — CAUGHT
+- **C08** (Synthetic provider presented without disclosed data_origin): expected criterion `citation_validity` mean score 2.0 — CAUGHT
 
 ## Rubric judge scores (SECONDARY)
 
 | Provider NPI | citation_validity | counter_evidence | hallucination | legal_discipline | numeric_grounding | Low-reliability criteria |
 |---|---|---|---|---|---|---|
-| 1003001439 | 1.0 | 5.0 | 2.0 | 5.0 | 4.0 | — |
-| 1003008756 | 1.0 | 3.7 | 2.7 | 5.0 | 4.7 | — |
-| 9010000000 | 1.0 | 2.0 | 1.7 | 5.0 | 3.7 | — |
-| 9020000000 | 2.0 | 5.0 | 2.0 | 5.0 | 3.0 | — |
-| 9030000000 | 2.0 | 5.0 | 3.0 | 5.0 | 4.0 | — |
-| 9040000000 | 3.0 | 5.0 | 3.0 | 5.0 | 4.0 | — |
-| 9050000000 | 4.0 | 5.0 | 3.0 | 5.0 | 5.0 | — |
-| 9060000001 | 4.0 | 5.0 | 3.0 | 5.0 | 5.0 | — |
-| 9070000000 | 2.0 | 5.0 | 2.0 | 5.0 | 4.0 | — |
-| 9080000000 | 1.0 | — | 1.7 | 5.0 | 3.3 | counter_evidence |
-| 9090000000 | 4.0 | 5.0 | 3.0 | 5.0 | 3.7 | — |
-| 9100000000 | 4.0 | 5.0 | 2.7 | 5.0 | 4.3 | — |
+| 1003001439 | 1.0 | 2.0 | — | 5.0 | 4.3 | hallucination |
+| 1003008756 | 0.7 | — | 1.3 | 5.0 | — | counter_evidence, numeric_grounding |
+| 9010000000 | 1.0 | 2.0 | 2.3 | 5.0 | 4.3 | — |
+| 9020000000 | 2.0 | 5.0 | 3.0 | 5.0 | 5.0 | — |
+| 9030000000 | 3.7 | 5.0 | 3.7 | 5.0 | 4.3 | — |
+| 9040000000 | 2.7 | 5.0 | 2.0 | 5.0 | 3.7 | — |
+| 9050000000 | 4.0 | 5.0 | 4.0 | 5.0 | 5.0 | — |
+| 9060000001 | 4.3 | 5.0 | 4.0 | 5.0 | 5.0 | — |
+| 9070000000 | 3.0 | 5.0 | 3.7 | 5.0 | 4.0 | — |
+| 9080000000 | 1.0 | 4.0 | 1.3 | 5.0 | 2.7 | — |
+| 9090000000 | 4.0 | 5.0 | 3.0 | 5.0 | 4.0 | — |
+| 9100000000 | 4.0 | 5.0 | 4.0 | 5.0 | 5.0 | — |
 
 ## Deterministic-vs-LLM disagreement
 
-None observed.
+- **9030000000**: sample 0: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9030000000**: sample 2: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9050000000**: sample 0: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9050000000**: sample 1: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9050000000**: sample 2: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9060000001**: sample 0: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9060000001**: sample 1: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9060000001**: sample 2: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9100000000**: sample 0: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9100000000**: sample 1: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
+- **9100000000**: sample 2: LLM scored hallucination=4 but the deterministic check found a fabricated identifier
 
 ## Three worst-scoring cases
 
-### 9010000000 (overall 2.7/5)
-  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative, but it provides zero citations and zero source_ids. Because there are no stored-artifact or graph-node references attached to the claims, most claims cannot be traced, so citation validity is largely unsatisfied despite the empty citation report resolving cleanly.
-  - `counter_evidence` (2/5): The packet does include a counter-evidence section, but it does not provide a substantive benign explanation that rebuts an actual fired signal. Its only explanation is procedural—that there were no fired signals to rebut—so the counter-evidence requirement is only weakly met.
-  - `hallucination` (2/5): The narrative introduces specific community-candidate properties, synthetic nearby entities, and enforcement case identifiers that are not present as structured evidence objects in the bundle excerpt. They may be real, but within this packet they are unsupported assertions, so there is a meaningful hallucination risk even though some top-level facts like the empty signals array are supported.
-  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative but provides zero citations and zero source_ids, so the claims do not trace to stored artifacts or graph nodes within the packet even though the citation report says all resolved.
-  - `counter_evidence` (2/5): The packet does not provide a substantive benign explanation for any actual adverse indicator; it only explains that rebuttal was impossible because there were no fired signals. The statement about a small, tightly connected provider neighborhood is contextual, but it is not framed as a concrete benign alternative to a specific signal.
+### 1003008756 (overall 2.3/5)
+  - `citation_validity` (0/5): The packet makes many factual claims in the narrative but provides zero citations for any of them; a clean resolution report with total_citations 0 does not satisfy the requirement that claims trace to stored artifacts or graph nodes.
+  - `numeric_grounding` (2/5): Some numbers are grounded by the bundle, such as provider_npi 1003008756 and the empty signals/enforcement arrays supporting 0 indicators, but the narrative introduces one-hop and two-hop counts and a long list of related NPIs without any structured hybrid-search result in the packet to ground those numbers.
+  - `hallucination` (1/5): The narrative relies on a hybrid-search neighborhood, specific officer_id, phone, normalized_key, and many two-hop NPIs, but no hybrid-search evidence object is included in the packet. Those entities and relationships therefore appear unsupported by the packet's own evidence, even if they may exist elsewhere.
+  - `citation_validity` (1/5): The packet makes many factual claims in the narrative, including specific hop distances, an officer_id, a phone number, a normalized_key, and many NPIs, but the packet provides zero citations for any of them. The citation report shows total_citations 0, so the claims do not trace to stored artifacts or graph nodes within the packet.
+  - `hallucination` (2/5): The narrative introduces a large set of entities and relationships from an asserted hybrid search, but the packet contains no structured hybrid-search result, no citations, and no attached graph extract supporting those identifiers or the one-hop and two-hop relationships. Those entities may be real, but within this packet they are unsupported appearances.
 
 ### 9080000000 (overall 2.8/5)
-  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative but provides zero citations for any of them; although the citation report says all resolved, it only reflects that there were no citations to validate, so claim-level traceability is not demonstrated.
-  - `hallucination` (2/5): The packet acknowledges missing direct community context, yet the narrative still asserts that hybrid search surfaced several communities with member_count 3 and mentions specific shared officer, phone, and address relationships without any supporting structured records in the bundle, so unsupported entities or relationships may have been introduced.
-  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative but provides zero citations for any of them; a clean validation report with total_citations 0 does not satisfy the requirement that claims trace to stored artifacts or graph nodes.
-  - `counter_evidence` (2/5): The packet does include a benign explanation, but it is limited and weakly supported because the counter_evidence block has per_signal as an empty list and the narrative offers only a general alternative interpretation rather than a substantive rebuttal tied to concrete fired signals.
-  - `hallucination` (1/5): These entities and relationships appear only in the narrative and are not supported by any structured evidence entries, source_ids, or signal outputs in the packet, so the packet presents unsupported identifiers and relationships.
+  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative about a shared officer, shared phone, shared address, small communities, and enforcement-search results, but it provides zero citations and zero source_ids anywhere in the bundle, so those claims do not trace to stored artifacts or graph nodes within the packet itself.
+  - `numeric_grounding` (2/5): Some numbers are grounded by the structured packet, including provider_npi 9080000000, the empty signals array, member_count 3, and the statement that the provider exhibits 0 indicators. But the narrative also references a phone number and address key without any structured evidence object showing where those values came from, so numeric content is only partially grounded within the packet.
+  - `hallucination` (1/5): The packet introduces specific entities and relationships—an officer_id, a phone number, an address normalized_key, and community findings—but the evidence bundle contains no supporting graph objects, no source_ids, no signals, and no structured neighborhood data establishing those relationships. Those details therefore appear unsupported by the packet's own evidence.
+  - `citation_validity` (1/5): The packet reports zero citations while the narrative makes multiple factual claims about a shared officer, shared phone, shared address, community search results, and lack of direct community context. Because those claims are uncited in the packet, they do not trace to stored artifacts or graph nodes within the packet itself.
+  - `hallucination` (1/5): The packet introduces specific identifiers and relationships—officer_id ba470fec46f979be7f8a1c79, phone +14075559400, normalized_key 50|SLEEPY HOLLOW|DR|32801, and community member_count 3—without any supporting structured evidence or citations in the bundle. Those details may be true, but within this packet they are unsupported.
 
-### 1003001439 (overall 3.4/5)
-  - `citation_validity` (1/5): The packet makes many factual claims in the narrative about an address normalized_key, a phone number, an officer with officer_id, a taxonomy code, community search results, and a case_id, but it provides zero citations and zero source_ids for any of them. Because the packet contains claims without traceable stored artifacts or graph-node citations, citation validity is largely unsatisfied despite the internal report saying all resolved.
-  - `hallucination` (2/5): The packet introduces multiple entities and relationships only in free-text narrative, not in structured evidence fields: the address normalized_key, phone, officer, taxonomy code, community search results, and the enforcement case search hit all appear without corresponding structured records in the bundle. That makes it impossible to verify from the packet alone whether these entities and relationships are supported, so hallucination risk remains material even though the narrative avoids linking the enforcement case to the provider.
-  - `citation_validity` (1/5): The packet makes many factual claims in the narrative about an address normalized_key, a phone number, an officer, a taxonomy code, community search results, and a case_id, but it provides zero citations and zero source_ids. Because the packet contains claims without any traceable stored artifact or graph-node references, citation validity is largely unsatisfied despite the citation_report saying all_resolved with total_citations 0.
-  - `hallucination` (2/5): The packet introduces multiple entities and relationships in the narrative that are not backed by any structured evidence objects in the bundle: the address neighborhood, the phone-sharing context, the officer identity, the taxonomy, the community search results, and the candidate enforcement case are all asserted without accompanying evidence records or citations. Because these items may be real but are unsupported within the packet as presented, the hallucination risk is material.
-  - `citation_validity` (1/5): The packet makes many factual claims in the narrative about an address normalized_key, a phone number, an officer, a taxonomy code, community search results, and a case_id, but it provides zero citations and zero source_ids, so those claims do not trace to stored artifacts or graph nodes within the packet.
+### 9010000000 (overall 2.9/5)
+  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative but provides zero citations for any of them. Although the citation report says all resolved, it also shows total_citations 0, so claim-level traceability is missing rather than demonstrated.
+  - `counter_evidence` (2/5): The packet does not provide a substantive benign explanation for an adverse signal; it mainly explains that rebuttal was impossible because there were no fired signals. The nearby-community discussion offers some benign context, but it is not framed as a developed alternative explanation to a concrete indicator.
+  - `citation_validity` (1/5): The packet makes multiple factual claims in the narrative but provides zero citations for any of them. The citation report resolves because there were no citations to check, not because the claims were actually sourced to stored artifacts or graph nodes.
+  - `counter_evidence` (2/5): The packet does include a benign explanation — 'That pattern is consistent with a small, tightly connected provider neighborhood rather than a broad or highly dispersed one' — but it is not tied to any fired signal and the structured counter_evidence section explicitly says there are no signal_type entries to rebut. That makes the counter-evidence present but only weakly operative as rebuttal.
+  - `hallucination` (2/5): This narrative introduces community candidates, California location, shared-address/shared-officer linkage, and specific nearby synthetic entities, but the bundle does not include the underlying community records, neighborhood expansion output, or source-linked evidence for those relationships. Those details may be true, but in this packet they are unsupported assertions rather than demonstrated evidence.

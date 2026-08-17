@@ -21,12 +21,28 @@ providers — and therefore at most 4 Azure calls — run at once, system-wide.
 The M8 dashboard reads the cost ledger by `agent` name, not by graph node, so
 this collapse costs nothing in per-agent-type observability.
 
-**Fail-fast is deliberate, not a gap.** `_ParallelWorker`'s fan-out cancels
-every in-flight provider the moment one raises. CLAUDE.md hard rule 7 ("fail
-loudly... bad data halts the run") is exactly this behavior — a provider
-whose case would come out fabricated or citation-broken should stop the run
-visibly, not get silently dropped from a big batch. `screen_provider` catches
-nothing.
+**Per-provider `SpecterError` is caught, visibly, not silently (revised
+M10).** M6's original design let any raised error — including a single
+provider's own content-quality rejection — cancel every other in-flight
+provider via `_ParallelWorker`'s fan-out. That was fine at M6/M9 smoke-test
+scale (1-12 curated providers, essentially never hit this in practice). At
+M10's real 250-provider cohort scale, this was found to recur: a real DME
+provider's `case_reporter` narrative cited a number ungrounded in that
+provider's own evidence (CLAUDE.md hard rule 1), correctly raising
+`NumericGroundingError` — and took the other ~150 already-succeeded
+providers' worth of a from-scratch run down with it. Hard rule 1's own
+wording is "a bug that fails **the case**," not "fails the run" — so
+`screen_provider` now catches `SpecterError` (and only `SpecterError` — a
+genuine bug elsewhere, e.g. a `TypeError`, still propagates and halts
+everything, per hard rule 7) and returns a rejected-case record instead of
+raising. The case is not written to `data/cases/`, and the rejection is
+loud: logged via `structlog` at `warning` level and present, labelled
+`status="rejected"`, in the run's own summary output — this is the opposite
+of "silently dropped from a big batch," which is what the original comment
+here was actually guarding against. A source that is broken for *every*
+provider (the scenario hard rule 7 is really about) still halts everything,
+because every provider would then independently raise and the whole cohort
+would show up as `rejected` — visible, not masked.
 """
 
 from __future__ import annotations
@@ -48,6 +64,7 @@ from specter.agents.graph_investigation import investigate
 from specter.agents.skeptic import challenge
 from specter.core.contracts import ScreeningThresholds
 from specter.core.enums import Verdict
+from specter.core.errors import SpecterError
 from specter.workflow.state import ScoringService, build_candidate_pairs, cohort_select
 
 logger = structlog.get_logger(__name__)
@@ -113,41 +130,53 @@ def build_screening_workflow(
     @node(parallel_worker=True, max_parallel_workers=max_parallel_providers)
     async def screen_provider(ctx: Context, node_input: str) -> dict[str, Any]:
         npi = node_input
+        try:
+            pairs = build_candidate_pairs(driver, [npi])
+            entity_adjudications: list[dict[str, Any]] = []
+            for _, candidate_npi in pairs:
+                result = await adjudicate(
+                    driver, npi, candidate_npi, thresholds, evidence_dir, runtime
+                )
+                entity_adjudications.append(result.output)
 
-        pairs = build_candidate_pairs(driver, [npi])
-        entity_adjudications: list[dict[str, Any]] = []
-        for _, candidate_npi in pairs:
-            result = await adjudicate(driver, npi, candidate_npi, thresholds, evidence_dir, runtime)
-            entity_adjudications.append(result.output)
+            graph_result = await investigate(driver, npi, thresholds, evidence_dir, runtime)
+            enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
 
-        graph_result = await investigate(driver, npi, thresholds, evidence_dir, runtime)
-        enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
+            counter_result = await challenge(
+                npi, graph_result.output, enforcement_result.output, runtime
+            )
 
-        counter_result = await challenge(
-            npi, graph_result.output, enforcement_result.output, runtime
-        )
+            case_score = scoring_service.score(
+                npi,
+                graph_result.output["signals"],
+                enforcement_result.output,
+                entity_adjudications,
+                counter_result.output["confidence_adjustment"],
+            )
 
-        case_score = scoring_service.score(
-            npi,
-            graph_result.output["signals"],
-            enforcement_result.output,
-            entity_adjudications,
-            counter_result.output["confidence_adjustment"],
-        )
+            case_packet = await synthesize(
+                npi,
+                graph_result.output,
+                enforcement_result.output,
+                counter_result.output,
+                driver,
+                evidence_dir,
+                runtime,
+            )
+        except SpecterError as exc:
+            # Visible, not silent: logged loudly and present in the run's own
+            # summary output, labelled `rejected` — see this module's
+            # docstring. Only `SpecterError` (a *content*-quality rejection
+            # for this one provider) is caught; any other exception still
+            # propagates and halts the whole run, per CLAUDE.md hard rule 7.
+            logger.warning("screening.provider_rejected", npi=npi, reason=str(exc))
+            return {"npi": npi, "status": "rejected", "rejection_reason": str(exc)}
 
-        case_packet = await synthesize(
-            npi,
-            graph_result.output,
-            enforcement_result.output,
-            counter_result.output,
-            driver,
-            evidence_dir,
-            runtime,
-        )
         (cases_dir / f"{npi}.json").write_text(case_packet.model_dump_json(indent=2))
 
         return {
             "npi": npi,
+            "status": "screened",
             "priority_tier": case_score.priority_tier.value,
             "case_score": case_score.model_dump(mode="json"),
             "candidate_pair_count": len(pairs),

@@ -19,6 +19,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
+import httpx
 import yaml
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -34,8 +35,33 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _APP_NAME = "specter_screening"
 
 
+def _confirm_azure_key_alive(settings) -> None:
+    url = settings.azure_api_base.rstrip("/") + "/chat/completions"
+    resp = httpx.post(
+        url,
+        headers={
+            "api-key": settings.azure_api_key.get_secret_value(),
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "gpt-5.4-nano",
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_completion_tokens": 5,
+        },
+        timeout=20,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Azure key check failed ({resp.status_code}): {resp.text[:300]} — "
+            "aborting before the cohort loop starts, not partway through it."
+        )
+
+
 async def main(limit: int | None) -> None:
     settings = get_settings()
+    print("Confirming Azure key is live...")
+    _confirm_azure_key_alive(settings)
+    print("Azure key OK.")
     driver = GraphDatabase.driver(
         settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value())
     )
@@ -86,8 +112,10 @@ async def main(limit: int | None) -> None:
         return
 
     assert isinstance(result, list), f"expected a list of summaries, got {type(result)}"
-    print(f"cohort_size={len(result)}")
-    for summary in result:
+    rejected = [s for s in result if s.get("status") == "rejected"]
+    screened = [s for s in result if s.get("status") == "screened"]
+    print(f"cohort_size={len(result)} screened={len(screened)} rejected={len(rejected)}")
+    for summary in screened:
         score = summary["case_score"]
         print(
             f"  {summary['npi']}: priority_tier={summary['priority_tier']} "
@@ -95,6 +123,8 @@ async def main(limit: int | None) -> None:
             f"citations_resolved={summary['citation_report_all_resolved']} "
             f"candidate_pairs={summary['candidate_pair_count']}"
         )
+    for summary in rejected:
+        print(f"  {summary['npi']}: REJECTED — {summary['rejection_reason']}")
     driver.close()
 
 
