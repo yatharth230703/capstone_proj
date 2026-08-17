@@ -16,6 +16,7 @@ from neo4j import Driver
 from specter.core.contracts import RiskSignal, ScreeningThresholds
 from specter.core.enums import DataOrigin
 from specter.tools.entity_tools import haversine_km, zip_centroid
+from specter.tools.maps_tools import CLASSIFICATION_LIMITATIONS
 
 logger = structlog.get_logger(__name__)
 
@@ -259,6 +260,56 @@ def geographic_spread(
         [f"graph:officer:{best['officer_id']}", f"graph:provider:{best['peer_npi']}"],
         known_limitations=limitations,
         geocoding_method="zcta_centroid",
+    )
+
+
+def physical_existence(
+    driver: Driver, npi: str, thresholds: ScreeningThresholds
+) -> RiskSignal | None:
+    """Fires when this provider's practice address was classified by Google's
+    Address Validation API (M11, CLAUDE.md Amendment 4(c)) as a type that is
+    implausible for a practice location — residential, a mailbox store, or a
+    PO box.
+
+    No network call: the classification is precomputed onto the `Address` node
+    by `scripts/60_classify_addresses.py`, so this stays a pure Cypher read
+    with the same signature as every other detector.
+
+    `value` is the number of providers co-located at that address — a real
+    count from the graph. The Maps result is the *gate*, never the number.
+
+    Returns `None` when `location_type` is null, which is the correct result
+    for every synthetic address (they are deliberately never sent to Maps —
+    CLAUDE.md hard rule 5, no mixing `public` and `synthetic` origins) and for
+    every address not yet classified.
+    """
+    with driver.session() as session:
+        record = session.run(
+            """
+            MATCH (p:Provider {npi: $npi})-[:LOCATED_AT]->(a:Address)
+            WHERE a.location_type IS NOT NULL
+              AND a.location_type IN $implausible
+            MATCH (a)<-[:LOCATED_AT]-(any:Provider)
+            RETURN a.normalized_key AS key, a.location_type AS location_type,
+                   a.location_type_source_id AS artifact_id,
+                   count(DISTINCT any) AS colocated
+            ORDER BY colocated DESC LIMIT 1
+            """,
+            npi=npi,
+            implausible=list(thresholds.physical_existence_implausible_types),
+        ).single()
+    if record is None or record["colocated"] < thresholds.physical_existence_min_colocated:
+        return None
+    # Both citations must resolve through `evidence_tools.validate_citations`:
+    # the first as a graph node, the second as a stored EvidenceArtifact. A
+    # classification with no artifact behind it is a bug, not a soft warning.
+    source_ids = [f"graph:address:{record['key']}"]
+    if record["artifact_id"]:
+        source_ids.append(str(record["artifact_id"]))
+    return _signal(
+        "physical_existence", npi, float(record["colocated"]),
+        thresholds.physical_existence_min_colocated, source_ids,
+        known_limitations=[*CLASSIFICATION_LIMITATIONS, f"type:{record['location_type']}"],
     )
 
 

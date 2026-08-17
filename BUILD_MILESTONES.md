@@ -200,7 +200,7 @@ rule.
 
 | # | Milestone | Deliverable | Status |
 |---|---|---|---|
-| **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `TODO` |
+| **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `TODO` — code landed 2026-08-18, offline-verified; **live checkpoint pending the Maps API key**. See the Implementation status block in §5. |
 | **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `TODO` |
 | **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `TODO` |
 | **M14** | Dashboard frontend | The judge-facing UI: cohort overview, per-case drill-down, JudgeReport view | `TODO` |
@@ -343,14 +343,27 @@ these are new measurements, not restatements:**
    agents (9 agent/tier pairs — `entity_resolution` splits T1/T2 on
    escalation), `entity_resolution` T1 alone being 42,413 of them.
 
-### Verified green
+**M11's code has since landed** (same day, at the operator's request, ahead of
+the API key) — see the Implementation status block at the top of M11 in §5 for
+exactly what is verified and what is still pending. **M11 is not `DONE`.**
+
+### Verified green — and one red
 
 ```
-pytest tests/ -q          270 passed, 0 failed   (re-run 2026-08-18 at the start of
-                           this planning session — unchanged from M10's baseline)
-ruff check src/ tests/ scripts/     clean       (2026-08-18)
-mypy src/                           clean, 63 source files   (2026-08-18)
+pytest tests/ -q          270 passed, 0 failed   (session start, before M11's code)
+                          280 passed, 4 FAILED   (after M11's code)
+ruff check src/ tests/ scripts/     clean       (2026-08-18, after M11)
+mypy src/                           clean, 64 source files   (2026-08-18, after M11)
 ```
+
+**The 4 failures are the Azure key being dead for a third time, not M11.**
+`test_graph_retrieval.py` ×3 + `test_graph_investigation.py` ×1 — the exact
+set M8 documented as the dead-key symptom, all of them needing live
+embeddings. A fresh `httpx` call to `/chat/completions` returns `401 "Access
+denied due to invalid subscription key"`. **Confirmed by `git stash`: the same
+4 fail without any of M11's changes.** The other 280 pass, including M11's 11
+new offline tests. **Rotate the key before any live run** — D-20 now records
+three flips, not two.
 
 ## 4. CARRIED DEBT
 
@@ -372,7 +385,7 @@ mypy src/                           clean, 63 source files   (2026-08-18)
 | D-17 | **Synthetic scenario providers (S01–S10) carry zero `HAS_TAXONOMY` edges** — verified live M6 (`MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`). `cohort_select`'s taxonomy-prefix filter can therefore never select any of them; the live cohort (6,944 real DME providers) and the synthetic scenarios are two disjoint populations | Found via `workflow/state.build_candidate_pairs`/`cohort_select` while building M6; `ingest/synthetic.py`/`graph/loader.py` are outside M6's file list, not fixed. A cohort-based demo/eval will never see S01–S10 — query by `scenario_id` directly instead (M3/M5's smoke scripts already do) | unscheduled — fix in whichever milestone next touches `ingest/synthetic.py`, or route around it permanently if scenario-id-direct querying is judged sufficient |
 | ~~D-18~~ | ~~`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON~~ | **CLEARED M10.** It recurred for real on M10's first live cold-run attempt (a genuinely different poisoned key than M6's original finding), which is what finally forced the fix: `_invoke` now runs `_validate_output` before `runtime.cache.set`, gated behind a `validation_error` local so `runtime.ledger.record` still fires unconditionally (preserving real-cost accounting for a failed call — a naive validate-then-return-early rewrite would have silently dropped that telemetry). See `NOTES_API_DEVIATIONS.md` D23. | **cleared** |
 | D-19 | **`polars.read_excel` emits a `FutureWarning` that its return type becomes a `Series` instead of a `DataFrame` in Polars 2.0** — `ingest/state_medicaid._parse_tx` unpacks it as a dict of DataFrames and would break on that upgrade. Introduced 2026-08-17 with the `fastexcel==0.16.0` dependency (TX's source is a legacy `.xls`). The warning is deliberately **not** suppressed: it is the only signal that a polars bump breaks TX ingest, and silencing it would trade a noisy log line for a silent failure. | Trivial to fix when it lands (unpack the Series case), but pointless to pre-empt against an API that hasn't shipped — polars is pinned at `1.43.2` | **whenever polars is bumped to 2.x** — do not bump without re-running `pytest tests/test_ingest_connectors.py` |
-| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. | — | **cleared, but re-verify before every future live run — this is not hypothetical, it has happened twice** |
+| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. **2026-08-18 update: dead a THIRD time.** Found while running M11's suite — a fresh `httpx` call to `/chat/completions` returns `401 "Access denied due to invalid subscription key or wrong API endpoint"`, and the same 4 embedding-dependent tests M8 first documented are red again. Not caused by M11 (verified by `git stash`). **Three flips now. Treat "the key is alive" as false until you personally re-prove it, every session, no exceptions.** | — | **OPEN — key is dead as of 2026-08-18. Operator must rotate before any live run.** |
 | D-21 | ~~Ground-truth positives for `judge/detection_eval.py` sparser than plan §12.1 assumes~~ **CLEARED 2026-08-17 — design resolved AND empirically run.** Only 4 real (non-synthetic) providers out of 8,445 have a direct `EXCLUDED_BY` edge; `judge/detection_eval.py` reports this denominator plainly and treats per-scenario recall as the headline (plan §12.1's own instruction) via `ScenarioRecallResult.detector_exists`. **Real run, `JudgeReport.md`:** precision@10/25/50 = 0.00 (the only 2 real `CasePacket`s in the corpus have zero fired signals, so `signal_count_proxy` ranking had nothing to favor — a thin-corpus artifact, reported honestly rather than hidden), **8/8 scenarios with a Phase 1 detector detected**. | — | **cleared** |
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
 | D-23 | **`CaseScore` is never written to disk.** `workflow/screening.py:175` persists only the `CasePacket`; the `case_score` dict travels up to `scripts/40_screen.py`, gets printed, and is dropped. Recomputing it from a persisted packet is *almost* possible — `signals`, `enforcement_matches`, `legal_status_per_match` and `counter_evidence.confidence_adjustment` are all in the packet — but **`entity_adjudications` are not persisted anywhere**, and `ScoringService.score` reads them for `identity_integrity` and for the "unresolved entity-match conflict" gate reason (`workflow/state.py:128-131`, `:159-160`). A recomputation would therefore silently assume zero conflicts, i.e. fabricate a number. Found 2026-08-18 while scoping M13. | Fixing it is a ~3-line edit (persist the per-provider summary `screen_provider` already returns, which contains `case_score.model_dump(mode="json")` in full) — but it only produces data on the **next** screening run, so it is M13's call whether to pay for a fresh run or ship a dashboard whose tier chart is recomputed-and-labelled-approximate. Do not silently recompute and present it as exact. | **M13** |
@@ -2561,6 +2574,74 @@ milestone is `BLOCKED`, no starting M12 before M11 is `DONE`.
 ---
 
 ### M11 — Physical Existence signal (Google Maps) · `TODO`
+
+**Implementation status (2026-08-18): code landed, live checkpoint NOT run.**
+The operator asked for the code to be written ahead of provisioning the API
+key, explicitly overriding this Action Plan's "do not write a line of
+classifier code against an unverified credential" (Step 1). Everything that
+does not need the key is done and verified offline; everything that needs it
+is still pending. **This milestone is not `DONE` and must not be marked
+`DONE` until the checkpoint below actually runs.**
+
+Done and verified offline:
+- `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, the
+  `physical_existence` detector, its binding, the `graph_investigation`
+  wiring, `AddressClassification`, the settings field, the config entries,
+  `tests/test_maps_tools.py` (11 tests, fully offline).
+- `prompts/blocks/b0_tool_schemas.md` regenerated — the diff is exactly the
+  one new tool schema, `+7` lines, nothing else moved.
+- `ruff check src/ tests/ scripts/` clean; `mypy src/` clean across **64**
+  source files (was 63).
+- `python scripts/60_classify_addresses.py --limit 2` fails loudly with the
+  right message when no key is set — verified by running it.
+
+Still pending, all of it requiring the real key:
+- Steps 1 and 2 (confirm the credential mechanism; empirically pick the API).
+- Every live checkpoint command, the real `location_type` distribution, the
+  before/after tier distribution, `NOTES_API_DEVIATIONS.md` D25's real
+  response shape, and the S01 decision (Step 8).
+
+**Two blockers found while implementing, neither caused by this work:**
+1. **The Azure key is dead again — a third flip** (D-20 recorded two). A fresh
+   `httpx` call to `/chat/completions` returns `401 "Access denied due to
+   invalid subscription key"`. The suite is therefore **4 failed, 280
+   passed**, and those 4 are the exact set M8 documented as the dead-key
+   symptom (`test_graph_retrieval.py` ×3, `test_graph_investigation.py` ×1,
+   all needing live embeddings). **Confirmed not caused by M11's changes**: the
+   same 4 fail on a `git stash` of this work. The other 280 pass, including
+   all 11 new ones. The operator needs to rotate the key again before any live
+   screening run.
+2. Consequently `python scripts/40_screen.py --limit 25` (checkpoint step 6)
+   could not be run either.
+
+**Deviations from the Action Plan below, all deliberate:**
+- **The API was chosen without Step 2's empirical comparison** — that needs
+  the key. **Address Validation API** was picked on the reasoning that it is
+  the only candidate returning a *direct* residential/business/CMRA
+  discriminator (`uspsData.dpvCmra` is USPS's own Commercial Mail Receiving
+  Agency flag) rather than a business-category list to infer from. **The
+  response field paths are `UNVERIFIED:` — written from documentation, never
+  observed.** They are named once, in `maps_tools._FIELD_PATHS`, so a wrong
+  guess is a small edit; `tests/test_maps_tools.py`'s fixtures are what will
+  fail if the shape differs, which is the point of them.
+- **No `location_type_map` in `config/screening.yaml`.** The Action Plan
+  assumed a Places-style type vocabulary to map. Address Validation returns
+  *booleans*, so there is no table to configure — the precedence
+  (CMRA → poBox → residential → business) lives in `classify` as eight
+  documented lines and is unit-tested. What genuinely varies —
+  `physical_existence_implausible_types` and the threshold — **is** in config.
+- **`commercial_medical` dropped from `LocationType`.** Address Validation
+  carries no business-category data, so it could never be emitted. Telling a
+  medical office from a nail salon would need the Places API, and the signal
+  only gates on the implausible types. Five types became four plus
+  `unclassified`, with `po_box` added.
+- **The new thresholds live under `thresholds:`**, not a separate config
+  block, so they reach every detector through the one `load_thresholds` path
+  already plumbed everywhere. Both are defaulted on `ScreeningThresholds` so
+  an older `screening.yaml` still parses.
+- **`--screened-only` flag added** to the classifier: classifies just the
+  addresses of providers with a persisted `CasePacket` (244 calls), which is
+  the set M14 renders and the cheapest path to a complete demo.
 
 **Scope.** The signal `phase_1_build_plan.md` Amendment 3 explicitly deferred
 to Phase 2 — "address-type classification (residential vs. commercial vs.

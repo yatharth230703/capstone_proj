@@ -72,6 +72,7 @@ _SIGNAL_TOOL_NAMES = {
     "community_exclusion_density",
     "geographic_spread",
     "phoenix_pattern",
+    "physical_existence",
 }
 _TOOL_NAMES = _GRAPH_TOOL_NAMES | _SIGNAL_TOOL_NAMES
 
@@ -85,6 +86,7 @@ _SIGNAL_DETECTORS = (
     signal_tools.community_exclusion_density,
     signal_tools.geographic_spread,
     signal_tools.phoenix_pattern,
+    signal_tools.physical_existence,
 )
 
 _TASK_INSTRUCTION = (

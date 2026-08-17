@@ -957,3 +957,99 @@ and prints rejected NPIs with their reason rather than crashing on a
 `KeyError` when a summary lacks `case_score`.
 
 ---
+
+## D25 — Google Maps auth is an API key, not the Vertex SA. Address Validation chosen over Places/Geocoding, but its response shape is still UNVERIFIED
+
+**Found:** M11, 2026-08-18. **Affects:** `tools/maps_tools.py`,
+`scripts/60_classify_addresses.py`, `settings.google_maps_api_key`.
+
+### The credential question CLAUDE.md Amendment 3 raised, answered
+
+The operator proposed adding "both vertex role and map role" to a single
+service-account key. That does not work, for two reasons that are worth
+separating because they get conflated constantly:
+
+1. **Enabling a Maps API is a *project*-level action** (APIs & Services →
+   Enable), not a role you attach to a principal. There is no "Maps role" in
+   IAM to grant. Amendment 3's original wording ("Maps roles don't exist
+   there") was right, and it is right for a more basic reason than it stated.
+2. **The classic Maps endpoints authenticate with an API key only.** A
+   service-account bearer token is rejected by
+   `maps.googleapis.com/maps/api/*`. Some newer surfaces (`places.googleapis.
+   com`, `addressvalidation.googleapis.com`) may accept OAuth from a SA with
+   the `cloud-platform` scope — `UNVERIFIED:`, and it varies per API, so it is
+   not something to build on without testing.
+
+**Decision:** the Vertex SA stays exactly as it is (`Vertex AI User`, nothing
+added), and Maps gets a separate, restricted API key in `GOOGLE_MAPS_API_KEY`.
+`settings.google_maps_api_key` is `SecretStr | None` with `default=None`, so
+every non-M11 entry point keeps working without one.
+
+### Which Maps API — chosen on reasoning, not yet on evidence
+
+M11's Action Plan step 2 called for empirically comparing three candidates
+against five addresses with known answers. **That has not happened** — the
+operator asked for the code ahead of the key. The choice made on reasoning
+alone was the **Address Validation API**
+(`POST https://addressvalidation.googleapis.com/v1:validateAddress?key=…`,
+with `enableUspsCass: true`), because it is the only candidate that returns a
+*direct* discriminator rather than a business-category list to infer from:
+
+| Candidate | What it gives you | Why not |
+|---|---|---|
+| **Address Validation** | `metadata.residential` / `.business` / `.poBox`, and `uspsData.dpvCmra` — USPS's own Commercial Mail Receiving Agency flag | chosen |
+| Places API (New) Text Search | `types` for establishments at the address | needs inference from a category list; no residential concept; needs a `X-Goog-FieldMask` header |
+| Geocoding | `types`: `street_address`/`premise`/`subpremise`/`route` | tells you match *granularity*, not what the building is. `subpremise` on an apartment is weak evidence at best |
+
+**`dpvCmra` is the load-bearing field.** A mailbox store is also flagged
+`business: true`, so without CMRA every UPS Store classifies as an ordinary
+commercial premises. `maps_tools.classify` gives CMRA precedence over the
+business flag for exactly this reason, and there is a test asserting it.
+
+### What is UNVERIFIED, and how to check it in one call
+
+No live call has been made from this project. These field paths are from
+documentation, not from an observed response:
+
+```
+result.address.formattedAddress   -> str
+result.metadata.residential       -> bool
+result.metadata.business          -> bool
+result.metadata.poBox             -> bool
+result.uspsData.dpvCmra           -> "Y" | "N"
+```
+
+They are named **once**, in `maps_tools._FIELD_PATHS`, so a wrong guess is a
+localized edit rather than a rewrite. The fixtures in
+`tests/test_maps_tools.py` encode the same assumption — if the real shape
+differs, those tests are what will say so.
+
+First thing to do with the real key:
+
+```bash
+curl -s -X POST \
+  "https://addressvalidation.googleapis.com/v1:validateAddress?key=$GOOGLE_MAPS_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"address":{"regionCode":"US","addressLines":["1600 Amphitheatre Parkway, Mountain View, CA 94043"]},"enableUspsCass":true}' \
+  | python -m json.tool
+```
+
+Then repeat for a known UPS Store, a suburban house, a hospital, and one of
+the 244 real screened addresses, and confirm the five genuinely separate.
+`REQUEST_DENIED` / `403` with "not authorized to use this API" means the
+Address Validation API is not enabled on the project — an operator action, not
+something to code around. **Replace the test fixtures with a captured real
+response and update this section with what was actually true.**
+
+### Deliberate design point: classification is precomputed, never inline
+
+`scripts/60_classify_addresses.py` writes `location_type` onto the `Address`
+node; `signal_tools.physical_existence` is a pure Cypher read. This is not
+tidiness — `agents/graph_investigation._SIGNAL_DETECTORS` calls every detector
+as `d(driver, npi, thresholds)` under `max_parallel_workers=4` across 250
+providers, and putting a rate-limited external HTTP call there reproduces D23's
+failure shape exactly. Only `data_origin='public'` addresses are classified;
+synthetic ones are never sent to Google (CLAUDE.md hard rule 5, and their
+streets are fabricated anyway).
+
+---

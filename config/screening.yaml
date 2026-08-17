@@ -22,6 +22,14 @@ thresholds:
   community_exclusion_density_min_fraction: 0.15
   geographic_spread_min_km: 1500.0
   phoenix_pattern_max_months_since_exclusion: 24
+  # M11 (CLAUDE.md Amendment 4(c)) — Physical Existence. The Maps call is a
+  # GATE, not a source of numbers: `physical_existence`'s value is the count of
+  # providers co-located at the address, which comes from Cypher like every
+  # other detector's number. `min_colocated: 1.0` means "any provider at an
+  # implausible-type address is worth surfacing"; raise it to only surface
+  # clusters. `implausible_types` must be values of `contracts.LocationType`.
+  physical_existence_min_colocated: 1.0
+  physical_existence_implausible_types: ["residential", "mailbox_store", "po_box"]
   # B2 (plan §7.1) is above the cache boundary and shared by every agent —
   # all 255 communities would add ~20k tokens to every single call, so only
   # the top N by member_count are rendered (graph/summaries.py render_b2).
@@ -31,10 +39,23 @@ thresholds:
 # family weight (plan §10 — required so e.g. address_degree and
 # enumeration_burst, which are both about the same address cluster, don't
 # get counted as two independent indicators).
+#
+# M11 added a FOURTH family, `physical_existence`. It is deliberately not
+# folded into `address_anomaly`: that family's members are all graph-degree
+# facts about an address, whereas this one is a fact about what KIND of place
+# the address is, sourced externally. Folding them would let one Maps call
+# raise a family whose other members measure something else entirely — the
+# double-counting the family mechanism exists to prevent.
+#
+# NOTE (BUILD_MILESTONES.md D-24): `escalation_gate.min_independent_signal_
+# families: 3` now means "3 of 4" rather than "all 3". That is a real change to
+# how demanding the gate is. Re-measure the tier distribution; do NOT tune the
+# gate to compensate in either direction.
 signal_families:
   address_anomaly: [address_degree, enumeration_burst, address_churn]
   network_anomaly: [phone_degree, officer_degree, geographic_spread]
   adverse_history: [exclusion_proximity, community_exclusion_density, phoenix_pattern]
+  physical_existence: [physical_existence]
 
 # Escalation gate (plan §10, verbatim):
 #   high_priority requires:

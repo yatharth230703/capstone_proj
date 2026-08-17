@@ -37,6 +37,8 @@ Currently defined:
 - CriterionScore, RubricJudgment, BlindedCase, JudgeVerdict, CalibrationCase,
   ScenarioRecallResult, DetectionEvalReport (M9 of BUILD_MILESTONES.md, plan
   §12 `judge/`)
+- AddressClassification (M11 of BUILD_MILESTONES.md, CLAUDE.md Amendment 4(c)
+  `tools/maps_tools.py`)
 """
 
 from __future__ import annotations
@@ -271,6 +273,39 @@ class ScreeningThresholds(SpecterModel):
     geographic_spread_min_km: float
     phoenix_pattern_max_months_since_exclusion: int
     community_summary_cap: int = Field(gt=0)
+    # M11 (CLAUDE.md Amendment 4(c)). `physical_existence_implausible_types`
+    # lives here rather than in a separate config block so it reaches every
+    # detector through the one `load_thresholds` path already plumbed
+    # everywhere. Defaulted so an older `config/screening.yaml` still parses.
+    physical_existence_min_colocated: float = 1.0
+    physical_existence_implausible_types: list[str] = Field(
+        default_factory=lambda: ["residential", "mailbox_store", "po_box"]
+    )
+
+
+LocationType = Literal[
+    "residential", "mailbox_store", "po_box", "commercial", "unclassified"
+]
+
+
+class AddressClassification(SpecterModel):
+    """Output of `tools/maps_tools.classify` (M11, CLAUDE.md Amendment 4(c)) —
+    the Physical Existence signal `phase_1_build_plan.md` Amendment 3 deferred
+    to Phase 2.
+
+    `location_type` is derived by a documented, pure function over a Google
+    Address Validation response — never by a model, and never by an LLM
+    guessing what kind of place an address is. `"unclassified"` is a valid,
+    expected result (a PO-box-only ZIP, a rural route, a brand-new building
+    Google has never seen), following the precedent Amendment 3 set for
+    `zip_centroid` returning `None`: never substitute a guess.
+    """
+
+    normalized_key: str
+    location_type: LocationType
+    matched_formatted_address: str | None
+    classification_reason: str
+    known_limitations: list[str]
 
 
 class ProviderProfile(SpecterModel):

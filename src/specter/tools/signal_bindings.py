@@ -197,6 +197,26 @@ def build_signal_bindings(
         """
         return _run_signal(signal_tools.phoenix_pattern, npi)
 
+    def physical_existence(npi: str) -> dict[str, Any]:
+        """Report whether this provider's practice address is a type that is
+        implausible for a place of business — a home, a mailbox store, or a PO
+        box — and how many providers share it.
+
+        The address type comes from a postal-address database, not from a site
+        visit: a legitimate solo practitioner registering a home office, a
+        practice that uses a mail service for correspondence, and a shell
+        registration all produce the same classification. The measured value is
+        the co-located provider count, not a judgement about the address.
+
+        Args:
+            npi: the provider's 10-digit NPI.
+
+        Returns:
+            {"fired": bool, "signal": {...} | None} with `value` (co-located
+            provider count), `threshold`, `source_ids`, and a
+            `known_limitations` entry naming the classified type.
+        """
+        return _run_signal(signal_tools.physical_existence, npi)
 
     return [
         address_degree,
@@ -208,4 +228,5 @@ def build_signal_bindings(
         community_exclusion_density,
         geographic_spread,
         phoenix_pattern,
+        physical_existence,
     ]

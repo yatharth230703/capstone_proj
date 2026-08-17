@@ -54,6 +54,12 @@ class Settings(BaseSettings):
         default="gemini-3.7-flash", alias="VERTEX_GROUNDING_MODEL"
     )
 
+    # --- Google Maps Platform (M11, address classification) ---
+    # CLAUDE.md Amendment 4(c): an API key, deliberately separate from the
+    # Vertex service account above. Optional — only M11's batch classifier
+    # needs it, and every other entry point must keep working without one.
+    google_maps_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_MAPS_API_KEY")
+
     # --- Run control ---
     specter_run_profile: Literal["default", "cost", "quality"] = Field(
         default="default", alias="SPECTER_RUN_PROFILE"
@@ -87,6 +93,7 @@ class Settings(BaseSettings):
         "azure_embedding_deployment",
         "google_cloud_project",
         "google_application_credentials",
+        "google_maps_api_key",
         mode="before",
     )
     @classmethod

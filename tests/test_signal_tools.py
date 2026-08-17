@@ -65,6 +65,33 @@ def test_s01_shell_at_residential_fires_no_signal(
     assert st.address_degree(driver, npi, thresholds) is None
     assert st.phone_degree(driver, npi, thresholds) is None
     assert st.officer_degree(driver, npi, thresholds) is None
+    # M11 added the address-type classifier S01 was waiting for, but S01's
+    # addresses are fabricated streets (`ingest/synthetic.py:127`) and synthetic
+    # addresses are deliberately never sent to Maps (hard rule 5), so this stays
+    # None. Closing S01 for real needs the operator's sign-off to plant real
+    # residential addresses — M11 Action Plan step 8.
+    assert st.physical_existence(driver, npi, thresholds) is None
+
+
+def test_physical_existence_is_none_for_an_unclassified_address(
+    driver: Driver, thresholds: ScreeningThresholds
+) -> None:
+    """Every synthetic address, and every real address not yet run through
+    `scripts/60_classify_addresses.py`, has a null `location_type`. That is a
+    normal state, not an error — the detector returns None rather than raising
+    or guessing.
+    """
+    with driver.session() as session:
+        record = session.run(
+            """
+            MATCH (p:Provider)-[:LOCATED_AT]->(a:Address)
+            WHERE a.location_type IS NULL
+            RETURN p.npi AS npi LIMIT 1
+            """
+        ).single()
+    if record is None:
+        pytest.skip("every address in the graph is already classified")
+    assert st.physical_existence(driver, record["npi"], thresholds) is None
 
 
 def test_s02_shared_phone_fires_phone_degree(

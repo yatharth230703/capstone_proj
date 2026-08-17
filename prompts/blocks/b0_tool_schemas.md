@@ -111,6 +111,13 @@
     },
     "returns": "dict[str, Any]"
   },
+  "physical_existence": {
+    "docstring": "Report whether this provider's practice address is a type that is\nimplausible for a place of business \u2014 a home, a mailbox store, or a PO\nbox \u2014 and how many providers share it.\n\nThe address type comes from a postal-address database, not from a site\nvisit: a legitimate solo practitioner registering a home office, a\npractice that uses a mail service for correspondence, and a shell\nregistration all produce the same classification. The measured value is\nthe co-located provider count, not a judgement about the address.\n\nArgs:\n    npi: the provider's 10-digit NPI.\n\nReturns:\n    {\"fired\": bool, \"signal\": {...} | None} with `value` (co-located\n    provider count), `threshold`, `source_ids`, and a\n    `known_limitations` entry naming the classified type.",
+    "params": {
+      "npi": "str"
+    },
+    "returns": "dict[str, Any]"
+  },
   "propose_entity_matches": {
     "docstring": "Compute the deterministic match features between this provider and\neach candidate NPI: name similarity, and whether they share an address,\nphone, or officer.\n\nThis returns features only \u2014 it deliberately does not decide whether the\nrecords match. That adjudication is yours, and a false merge is far more\ndamaging than a missed match.\n\nArgs:\n    npi: the provider's 10-digit NPI.\n    candidates: NPIs to compare against.\n\nReturns:\n    {\"proposals\": [...], \"proposal_count\": int}.",
     "params": {
