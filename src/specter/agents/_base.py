@@ -118,11 +118,18 @@ def build_agent(
     tools: list[Any],
     output_schema: type[BaseModel],
     runtime: AgentRuntime,
+    tier_override: TierConfig | None = None,
 ) -> LlmAgent:
     """Construct one agent with all cross-cutting concerns already attached.
 
     `name` must be a valid Python identifier — ADK rejects anything else
     (`_base_node.py:46`), which rules out hyphens and dots.
+
+    `tier_override` (M9) lets a caller pin the tier config used to build this
+    agent — e.g. `judge/rubric_judge.py` needs `temperature=0.0` without
+    changing every other `T2_reasoning` task_class's shared temperature.
+    `None` (every existing caller) preserves normal `task_class`-based
+    routing, unchanged.
     """
     if not name.isidentifier():
         raise ValueError(f"agent name {name!r} must be a valid Python identifier")
@@ -130,7 +137,8 @@ def build_agent(
     instruction_path = runtime.prompts_dir / instruction_file
     instruction = instruction_path.read_text().strip()
     return _build_agent_with_instruction(
-        name, task_class, instruction, tools, output_schema, runtime
+        name, task_class, instruction, tools, output_schema, runtime,
+        tier_override=tier_override,
     )
 
 

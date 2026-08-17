@@ -183,7 +183,7 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 | **M6** | Orchestration | `workflow/screening.py`, `ScoringService`, `scripts/40_screen.py` | `DONE` |
 | **M7** | MCP integration | `tools/mcp_tools.py` — Playwright + Neo4j Cypher guardrails | `DONE`† |
 | **M8** | Observability | `obs/tracing.py`, `obs/dashboard.py`, `cli.py` | `DONE` |
-| **M9** | Judge subsystem | `judge/` — detection eval, deterministic checks, rubric judge, report | `TODO` |
+| **M9** | Judge subsystem | `judge/` — detection eval, deterministic checks, rubric judge, report | `BLOCKED` |
 | **M10** | Full run & docs | 250-provider run, `README.md`, demo script | `TODO` |
 
 ---
@@ -192,8 +192,41 @@ Statuses: `DONE` · `TODO` · `BLOCKED` · `DEFERRED`
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-17, post-M8 observability. M8 is `DONE`, M9 is next
-and its Action Plan is written.**
+**Last updated: 2026-08-17, post-M9 judge subsystem. M9 is `BLOCKED`
+(everything offline-buildable is done and tested; the live checkpoint
+cannot run — Azure key still dead, debt D-20). M10 is next; its Action
+Plan is written but inherits the same D-20 blocker for its own live run.**
+
+**What changed in M9 (judge subsystem) — read this before starting M10:**
+
+- **`src/specter/judge/` is no longer empty.** `blind.py`, `deterministic_
+  checks.py`, `calibration_fixtures.py`, `rubric_judge.py`, `detection_
+  eval.py`, `report.py` all exist, all import cleanly, all pass `ruff`/
+  `mypy`. `scripts/50_judge.py` exists and runs — up to the point of
+  raising on the dead Azure key, which is exactly what it's supposed to do.
+- **38 new tests, all green, all offline** (no LLM call in any of them):
+  `test_judge_blind.py` (5), `test_judge_deterministic_checks.py` (7),
+  `test_judge_calibration.py` (10), `test_judge_detection_eval.py` (12, 2
+  of which need live Neo4j only), `test_judge_rubric_judge.py` (5, the
+  actual verification for debt D-22's cache-disable fix). Full suite:
+  **256 passed, 4 failed** (unchanged D-20 pre-existing failures) — up from
+  the M8 baseline of 218 passed.
+- **`agents/_base.py`'s `build_agent` gained an optional `tier_override:
+  TierConfig | None = None`** — the only change to pre-existing code this
+  milestone made. Every other caller (data_quality, entity_resolution,
+  graph_investigation, enforcement_intel, skeptic, case_reporter) is
+  unaffected; the full pre-existing suite confirms this.
+- **The Azure key is still dead** — re-confirmed fresh this session with a
+  direct `httpx` call (not reusing M8's finding). This is now the reason
+  M9 is `BLOCKED` rather than `DONE`: the judge subsystem's actual purpose
+  (grading real cases with a real LLM) has zero live verification. See the
+  M9 section's "Result" block for the full accounting of what's genuinely
+  tested vs. what's still unverified, and §4 D-20/D-21/D-22.
+- **No real `JudgeReport.md` exists yet.** Whoever unblocks D-20 should run
+  `python scripts/50_judge.py` and treat that as this milestone's actual
+  completion, not a formality — it will also be the first live exercise of
+  `agents/_base.py`'s `tier_override` parameter and the first real check of
+  whether `per_criterion_variance` is genuinely nonzero (D-22).
 
 **What changed since the end of M7 (read this before §3's older detail):**
 
@@ -250,24 +283,28 @@ and its Action Plan is written.**
 ### Verified green
 
 ```
-pytest tests/ -q          218 passed, 4 failed   (2026-08-17, M8 end; +6 net vs the 213-passed
-                           M7 baseline: +7 new tests this session, -1 from the 4 pre-existing
-                           live-Azure failures below, which did not exist at the M7 checkpoint)
+pytest tests/ -q          256 passed, 4 failed   (2026-08-17, M9 end; +38 net vs the 218-passed
+                           M8 baseline — all 38 new, all offline, all in judge/*; the 4 failures
+                           are the same pre-existing D-20 ones, unchanged)
 ruff check src/ tests/ scripts/   All checks passed
-mypy src/                 Success: no issues found in 57 source files (was 53 — obs/tracing.py,
-                           obs/dashboard.py, cli.py, tools/_wrap.py added)
+mypy src/                 Success: no issues found in 63 source files (was 57 — judge/blind.py,
+                           judge/deterministic_checks.py, judge/calibration_fixtures.py,
+                           judge/rubric_judge.py, judge/detection_eval.py, judge/report.py added)
 docker compose ps         neo4j, phoenix, redis — all healthy
 ```
 
-**The 4 failures are new since the M7 checkpoint and are D-20 (dead Azure
-key), not an M8 regression:** `test_graph_retrieval.py::test_global_
+**The 4 failures are unchanged since M8 and are D-20 (dead Azure key), not
+an M9 regression:** `test_graph_retrieval.py::test_global_
 returns_structurally_valid_results`/`test_semantic_returns_structurally_
 valid_results`/`test_hybrid_merges_local_global_and_semantic` (all hit the
 live embedding deployment) and `test_graph_investigation.py::test_build_
-evidence_carries_fired_signals_and_hybrid_search` (same). Confirmed via a
-direct `httpx` call outside pytest that the key itself is dead, not a test
-bug — see the Azure section below and §4 D-20. Do not spend time debugging
-these as if they were caused by this milestone's diff.
+evidence_carries_fired_signals_and_hybrid_search` (same). Re-confirmed this
+session via a fresh direct `httpx` call outside pytest that the key is
+still dead, not a test bug — see the Azure section below and §4 D-20. Do
+not spend time debugging these as if they were caused by this milestone's
+diff — and do not assume a future session's green `pytest` run means the
+key is alive again; these 4 tests hit the embedding deployment specifically,
+not the chat-completion path `scripts/50_judge.py` needs.
 
 B0 (`prompts/blocks/b0_tool_schemas.md`) is untouched by M3 — no new tool
 binding was added (see "GraphRetriever wiring" below), so no regeneration
@@ -285,7 +322,7 @@ Docker Desktop is often not running at session start. `docker compose up -d`
 then wait for health; 36 tests skip themselves when Neo4j/Redis are down, so a
 "green" suite with 36 skips means you tested almost nothing.
 
-### Azure — the key is DEAD as of M8 (D-20), read this before running anything live
+### Azure — the key is STILL DEAD as of M9 (D-20), read this before running anything live
 
 **As of 2026-08-17 (M8), the Azure OpenAI key in `.env` returns `401
 Access denied due to invalid subscription key or wrong API endpoint` on
@@ -295,9 +332,16 @@ direct `httpx` call outside pytest (not a harness artifact):
 both 401 with the exact same message. This is **new** since the M7 session
 (which made real M7 live calls) — the key was live earlier the same day.
 Nothing in M8's diff touches credentials; this is an external rotation/
-expiry, not something introduced by this codebase. **Confirm this is fixed
-(a real `httpx`/`curl` call, not just a green `pytest`) before starting any
-M9 work that involves the judge or the calibration fixtures** — D-20, §4.
+expiry, not something introduced by this codebase.
+
+**Re-confirmed 2026-08-17 (M9), independently, with a fresh `httpx` call —
+not a stale finding carried forward.** Same 401, same message. This is the
+reason M9 is `BLOCKED` rather than `DONE` (see the M9 section's Result
+block). **Confirm this is fixed (a real `httpx`/`curl` call, not just a
+green `pytest`) before starting any M10 work that involves a real screening
+run or `scripts/50_judge.py`** — D-20, §4. Two sessions finding it dead in a
+row is a stronger signal than one; do not assume a third check will find it
+alive without operator action.
 
 The rest of this section (call form, deployment names, dimensions) describes
 what was verified true when the key was live; it has not become false, it is
@@ -801,9 +845,9 @@ BUILD_MILESTONES.md §0.2 says to verify rather than trust.
 | D-17 | **Synthetic scenario providers (S01–S10) carry zero `HAS_TAXONOMY` edges** — verified live M6 (`MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`). `cohort_select`'s taxonomy-prefix filter can therefore never select any of them; the live cohort (6,944 real DME providers) and the synthetic scenarios are two disjoint populations | Found via `workflow/state.build_candidate_pairs`/`cohort_select` while building M6; `ingest/synthetic.py`/`graph/loader.py` are outside M6's file list, not fixed. A cohort-based demo/eval will never see S01–S10 — query by `scenario_id` directly instead (M3/M5's smoke scripts already do) | unscheduled — fix in whichever milestone next touches `ingest/synthetic.py`, or route around it permanently if scenario-id-direct querying is judged sufficient |
 | D-18 | **`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON** — a single transient truncated response permanently poisons that cache key, replayed identically on every future call sharing it | Found live M6: `graph_investigation` on a real NPPES provider hit `AgentOutputError: response was not valid JSON: Unterminated string starting at: line 1 column 6102`, then reproduced *byte-for-byte identically* across 3 consecutive script runs — confirmed as a caching bug, not API flakiness, by clearing Redis (`redis-cli -p 6380 -n 0 flushdb`) and re-running successfully with no code change. Recommended fix: validate before caching, or skip the cache write on an `AgentOutputError`. `llm/response_cache.py`/`agents/_llm_call.py` outside M6's file list, not fixed here | high priority, unscheduled — worth fixing before M7/M9/M10's higher call volumes make it more likely to recur and masquerade as an unrelated bug |
 | D-19 | **`polars.read_excel` emits a `FutureWarning` that its return type becomes a `Series` instead of a `DataFrame` in Polars 2.0** — `ingest/state_medicaid._parse_tx` unpacks it as a dict of DataFrames and would break on that upgrade. Introduced 2026-08-17 with the `fastexcel==0.16.0` dependency (TX's source is a legacy `.xls`). The warning is deliberately **not** suppressed: it is the only signal that a polars bump breaks TX ingest, and silencing it would trade a noisy log line for a silent failure. | Trivial to fix when it lands (unpack the Series case), but pointless to pre-empt against an API that hasn't shipped — polars is pinned at `1.43.2` | **whenever polars is bumped to 2.x** — do not bump without re-running `pytest tests/test_ingest_connectors.py` |
-| D-20 | **The Azure OpenAI key in `.env` is dead** — `401 Access denied due to invalid subscription key or wrong API endpoint` on both `/chat/completions` and `/embeddings`, confirmed live M8 with a direct `httpx` call outside pytest (not a test-harness artifact). Blocks every live LLM/embedding call: the 4 pre-existing `test_graph_retrieval.py`/`test_graph_investigation.py` failures are this, `scripts/35_smoke_investigation_agents.py` could not run, and M8's cold-vs-warm dashboard demo and the two new `specter.prompt_version`/`specter.provider_npi` span attributes could only be verified offline (synthetic spans, direct callback invocation) rather than through a real agent call. | Outside every milestone's file list — this is an operator credential, not a code bug. User confirmed proceeding around it for M8 rather than pausing to rotate the key. | **before M9's first live run** — M9's rubric judge and calibration fixtures are meaningless without real Azure calls; do not attempt M9's live checkpoint until this is confirmed fixed (`curl`/`httpx` a real chat-completion call, not just `pytest`, since a stale cached failure or a skip could hide the same problem again) |
-| D-21 | **Ground-truth positives for `judge/detection_eval.py` (M9) are far sparser than plan §12.1 assumes.** Live query M8: only **8 total** `Provider` nodes carry an `EXCLUDED_BY` edge in the whole graph, and **4 of those 8 are synthetic** (S05/S06/S10-style scenario providers) — only **4 real (non-synthetic) providers**, out of 8,445 real providers loaded, have a direct exclusion link. This is expected, not a bug: most LEIE/state-Medicaid exclusion records don't carry an NPI and Amendment 1's matching rule forbids auto-linking without one, so the vast majority of the 119,282 `Exclusion` nodes never get an `EXCLUDED_BY` edge to a `Provider` at all. `precision@10/@25/@50` computed only against real positives will be statistically thin; the synthetic S01-S10 scenarios (`expected_signals` per scenario, read from `ingest/synthetic.py`, not persisted on the graph — see the M9 Action Plan) are the more meaningful evaluable ground truth and per plan §12.1's own instruction should be the headline number, not a footnote. | Found live while writing M9's Action Plan, not fixed (out of M8's scope — no code changed) | **M9** — design detection_eval's ground truth around this reality instead of the plan's implicit assumption of a richer positive set; report the real 4-vs-8,445 denominator rather than a misleadingly small-sample precision number without context |
-| D-22 | **CLAUDE.md Amendment 2 mitigation 5 ("sample index excluded from the cache key") appears to contradict its own stated purpose.** The L1 response cache (`llm/response_cache.make_cache_key`) is keyed on `(agent_name, prompt_version, model_id, evidence)` — if three same-evidence judge samples truly exclude the sample index from that key, samples 2 and 3 become L1 cache *hits* on sample 1's response (same key → same cached value), making the "per-criterion variance across 3 samples" always exactly zero. That defeats the mitigation's own reason for existing. Not resolved this session — flagged, not fixed, since M8's scope never touches `judge/`. | CLAUDE.md's literal text vs. its own stated intent — a judgment call for whoever builds `judge/rubric_judge.py`, not something to silently reinterpret without saying so | **M9** — recommended fix in the M9 Action Plan below: give the judge's `AgentRuntime` its own `ResponseCache(..., enabled=False)` rather than trying to thread a sample index through the shared cache-key function |
+| D-20 | **The Azure OpenAI key in `.env` is still dead** — `401 Access denied due to invalid subscription key or wrong API endpoint`, re-confirmed live M9 with a fresh direct `httpx` call to `/chat/completions` (identical message to M8's finding; not a stale/cached result). This is now the reason **M9 is `BLOCKED`**: every piece of `judge/` that can be built and tested offline is done (38 new tests, all green), but `scripts/50_judge.py` cannot produce a real `JudgeReport.md` — it checks this exact thing as its first step and raises immediately, by design (CLAUDE.md hard rule 7: no partial/fake report). | Outside every milestone's file list — this is an operator credential, not a code bug. Two sessions in a row (M8, M9) have found it dead. | **blocks M9's live checkpoint AND M10's real 250-provider run** — re-confirm with a fresh `httpx`/`curl` call (not `pytest`, not "M8/M9 already checked") before spending any real Azure calls on either |
+| D-21 | **Ground-truth positives for `judge/detection_eval.py` (M9) are far sparser than plan §12.1 assumes — design resolved M9, not yet run against real data.** Live query M8: only **8 total** `Provider` nodes carry an `EXCLUDED_BY` edge in the whole graph, and **4 of those 8 are synthetic** — only **4 real (non-synthetic) providers** out of 8,445 have a direct exclusion link. `judge/detection_eval.py` (M9) reports this denominator plainly (`real_positive_count`/`real_positive_denominator`, never a bare percentage) and treats per-scenario recall as the headline, exactly as plan §12.1 itself instructs — `ScenarioRecallResult.detector_exists` separates the 8 scenarios with a real Phase 1 detector from S01/S08 (no detector by design), so the headline is never inflated to a misleading "10/10". This design is unit-tested (`tests/test_judge_detection_eval.py`) with fabricated cases; it has never been run against 10 real scenario `CasePacket`s, which need the same dead Azure key (D-20) to build. | The design fix is real code, not just a plan; the empirical run is still blocked | **M9's live checkpoint, once D-20 clears** — no further design work needed here |
+| D-22 | **CLAUDE.md Amendment 2 mitigation 5 ("sample index excluded from the cache key") appears to contradict its own stated purpose — fixed and mechanically verified M9, not yet empirically verified live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own `AgentRuntime` with `ResponseCache(..., enabled=False)`, rather than trying to thread a sample index through the shared cache-key function — sidesteps the ambiguity entirely instead of reinterpreting CLAUDE.md's literal wording. **Verified mechanically**: `tests/test_judge_rubric_judge.py` confirms the override actually disables the cache and that every sample gets an independent `ResponseCache` instance, offline. **Not verified empirically**: whether 3 real independent Azure calls on the same case actually produce nonzero `per_criterion_variance` still needs a live key (D-20) — the mechanism is proven, the real-world outcome it's meant to enable isn't yet. | Same root cause as D-21 — code-complete, blocked on D-20 for the live proof | **M9's live checkpoint, once D-20 clears** — watch `per_criterion_variance` on the first real run; all-zero would mean this fix has a bug the offline tests didn't catch, not that the model is perfectly consistent |
 
 ---
 
@@ -2038,7 +2082,7 @@ binding-assembly time instead of duplicating it 20 times.
 
 ---
 
-### M9 — Judge subsystem · `TODO`
+### M9 — Judge subsystem · `BLOCKED` (see Result below)
 
 **Scope.** `judge/detection_eval.py` (deterministic, no LLM — precision@k,
 per-scenario recall), `judge/deterministic_checks.py` (the three primary
@@ -2047,7 +2091,112 @@ from `CLAUDE.md` Amendment 2, `judge/calibration_fixtures.py` (C01–C10),
 `judge/report.py` — which must open with the verbatim
 `JUDGE INDEPENDENCE: LIMITED.` block.
 
-#### Action Plan
+**Result (2026-08-17).** Every module in scope is built and, everywhere it
+can be exercised without a live Azure call, genuinely tested — 38 new tests,
+all passing, `ruff`/`mypy` clean. **`BLOCKED`, not `DONE`, because this
+milestone's own Definition of Done requires `python scripts/50_judge.py` to
+produce a real `JudgeReport.md` with a genuine `n_caught/8` and real rubric
+scores, and that cannot run at all: BUILD_MILESTONES.md debt D-20's dead
+Azure key is still dead.** Confirmed fresh this session with a direct
+`httpx` call to `/chat/completions` (not cached, not `pytest`) —
+`401 Access denied due to invalid subscription key or wrong API endpoint`,
+identical to the M8 finding. `scripts/50_judge.py` checks this itself as its
+first step and raises immediately rather than producing a partial or fake
+report (CLAUDE.md hard rule 7) — running it live right now reproduces
+exactly that 401 and nothing else. Per §0.1 rule 5, this is what half-worked
++ written-reason `BLOCKED` looks like, same shape as M7's original (pre-D-1-
+clearance) `BLOCKED` state.
+
+**What's genuinely done, offline-verified:**
+- `core/contracts.py`: `CriterionScore` (verbatim Amendment 2 schema, incl.
+  the `weakness_found != "none"` validator), `RubricJudgment`, `BlindedCase`,
+  `JudgeVerdict`, `CalibrationCase`, `ScenarioRecallResult`,
+  `DetectionEvalReport`.
+- `agents/_base.py`: `build_agent` takes an optional `tier_override:
+  TierConfig | None = None`, forwarded to the existing `_build_agent_with_
+  instruction` machinery — a 1-line signature change, every other caller
+  unaffected (confirmed: the full pre-existing suite is still green).
+- `judge/blind.py`: `blind_case` genuinely raises `ProvenanceLeakError` on a
+  leaked "agent"/"gpt"/"tier"/"model" substring (case-insensitive, recursive
+  through nested dicts/lists) — 5 tests in `tests/test_judge_blind.py`,
+  including the Amendment-2-required "inject the word, assert it raises"
+  case, not just "today's real cases pass clean."
+- `judge/deterministic_checks.py`: all 3 checks reuse existing pure
+  functions/tools (`evidence_tools.validate_citations`/`_resolves_to_graph_
+  node`, `agents._grounding.numeric_violations`) rather than reimplementing
+  them, per the Action Plan's own instruction. 7 tests against the live
+  graph in `tests/test_judge_deterministic_checks.py` — both a clean
+  hand-built case and each relevant calibration fixture's defect are
+  confirmed caught.
+- `judge/calibration_fixtures.py`: all 10 fixtures (C01-C10) built — 8
+  synthetic (from one hand-constructed "clean" S03 base case, since neither
+  real `data/cases/*.json` packet has any fired signal to corrupt) + 2 real,
+  unmodified controls. **Two defects needed a judgment call, documented in
+  the module's own docstring rather than left implicit** — see the module
+  for C07 ("duplicate the one real signal, claim 2 indicators") and C08
+  ("narrative directly contradicts the signal's own `data_origin=synthetic`",
+  since a required field can't literally be omitted from a valid
+  `CasePacket`). 10 structural tests in `tests/test_judge_calibration.py`.
+- `judge/detection_eval.py`: `SCENARIO_EXPECTED_SIGNALS` static table (read
+  off `ingest/synthetic.py`'s `_scenario_01`-`_scenario_10`, not the graph —
+  confirmed `expected_signals` isn't a graph property). `scenario_recall`
+  treats S01/S08 (no Phase 1 detector, `expected_signals=[]`) as always
+  `recall_hit=True` but `detector_exists=False`, reported separately from
+  the 8 scenarios with a real detector — a judgment call, documented in
+  `ScenarioRecallResult`'s own docstring, made so the headline number is
+  never silently inflated by scenarios that were never detectable. 10 pure
+  tests + 2 live-Neo4j tests (`real_positive_npis`/`real_provider_count`,
+  no LLM) in `tests/test_judge_detection_eval.py`.
+- `judge/rubric_judge.py`: all 5 Amendment 2 mitigations wired — blinding
+  (reuses `blind.blind_case`), forced `weakness_found` (the contract-level
+  validator + one retry on `AgentOutputError`, same shape `graph_
+  investigation.investigate` uses for numeric-grounding), temperature 0.0
+  via `tier_override` (not a global tier mutation), and **debt D-22's fix**:
+  each of the 3 samples runs through its own `AgentRuntime` whose
+  `ResponseCache` is rebuilt with `enabled=False` (`_sample_runtime`) — this
+  is the part that's actually been verified this session (`tests/test_
+  judge_rubric_judge.py`: the disabled-cache override is real and every
+  sample gets an independent cache instance) even though the *samples
+  themselves* can't run live. `_aggregate`'s variance/low-reliability/mean
+  logic is also fully unit-tested offline with fabricated `RubricJudgment`s.
+  **Not verified live: `_run_one_sample`/`judge_case` themselves** — the
+  actual Azure call path — because there is no live key to call with.
+- `judge/report.py`: opens with the verbatim CLAUDE.md limitation block;
+  `render_report`'s section ordering is deterministic-primary /
+  LLM-secondary as required. **Not run against real data** — no real
+  `JudgeVerdict`s exist to render, so this module's actual markdown output
+  has only been eyeballed against hand-constructed inputs during
+  development, not asserted in a test. Whoever unblocks D-20 should add a
+  smoke check here, not just trust the docstring.
+- `scripts/50_judge.py`: end-to-end wiring, adapted from `scripts/
+  48_smoke_judgement_agents.py`'s proven per-scenario agent chain (investigate
+  → extract → challenge → synthesize). **Live-run this session up to and
+  including the Azure key check, which fails exactly as expected** — this
+  proves every import and the whole call graph up to that point resolves
+  correctly; it does not prove anything past `_confirm_azure_key_alive`.
+
+**What is NOT done and must not be claimed as done:**
+- No real `JudgeReport.md` exists. `n_caught/8` has never been computed
+  against a real judge response.
+- Debt **D-21** (thin real-positive ground truth) has a *design* resolution
+  (`detector_exists`/headline-vs-footnote framing in `judge/detection_eval.
+  py` and `judge/report.py`) but has never been run against real detection
+  results, since building the 10 scenario `CasePacket`s needs the same dead
+  key.
+- Debt **D-22** (cache-key self-contradiction) has a code fix that is
+  verified *mechanically* (the cache really is disabled, every sample really
+  gets an independent `ResponseCache`) but not verified *empirically* (that
+  3 real independent Azure calls actually produce nonzero variance on a real
+  case — that still requires a live key).
+
+**Do not start M9's live checkpoint, and do not attempt to build M10's real
+250-provider run, until a fresh `httpx`/`curl` call confirms the Azure key
+is alive** — re-run the exact check `scripts/50_judge.py` does first; a
+stale belief that "M8 already checked this" is exactly how a second session
+would waste calls against a key that's still dead.
+
+#### Action Plan (historical — as written before this session; superseded by
+the Result above for what actually got built)
 
 **Goal.** At the end of M9, `python scripts/50_judge.py` produces
 `JudgeReport.md` on a real (if modest — see below) case corpus: a
@@ -2462,4 +2611,152 @@ rationale and the generated-Cypher injection-surface acknowledgement),
 
 #### Action Plan
 
-*(not yet written)*
+**Goal.** At the end of M10: a real cold-then-warm `scripts/40_screen.py`
+run over the live cohort (target 250 providers, plan §13/§14), a real
+`scripts/50_judge.py` run producing a genuine `JudgeReport.md` (M9's own
+still-open live checkpoint — this milestone is where it actually happens),
+`README.md` documenting the architecture and the specific methodological
+choices CLAUDE.md's amendments made (Kimi removed, ZCTA not Maps, SAM.gov
+removed), `scripts/00_bootstrap.sh` for a clean-machine setup, and a `make
+demo` target that reproduces plan §14's 8-step demo script end to end. This
+is the last milestone — Phase 1 is complete when this checkpoint passes.
+
+**Inherited context — read every bullet before doing anything live.**
+
+1. **BLOCKER, same as M9's: the Azure OpenAI key is dead (debt D-20),
+   re-confirmed twice now (M8, M9), both times with a fresh direct `httpx`
+   call.** A 250-provider live run and a real judge run are both pure Azure
+   cost — do not attempt either until a *third*, fresh `httpx`/`curl` check
+   (not `pytest`, not trusting M8/M9's finding) confirms the key works.
+   `scripts/50_judge.py` already does this check as its first step and
+   raises immediately if it's still dead; do the equivalent check before
+   `scripts/40_screen.py --limit 250` too, since that script does **not**
+   currently do this check itself (it will simply fail deep into a 250-item
+   loop, wasting whatever ran before the failure) — either add the same
+   `_confirm_azure_key_alive`-style check to `40_screen.py` first, or run a
+   `--limit 1` smoke pass before committing to 250.
+2. **M9 is `BLOCKED`, not `DONE` — read its Result section (§2 status
+   table, and the M9 section itself) before assuming the judge subsystem is
+   proven.** Every `judge/` module is built and offline-tested (38 tests),
+   but `judge/rubric_judge.py`'s actual Azure-calling path
+   (`_run_one_sample`/`judge_case`) and `judge/report.py`'s actual rendered
+   output have **never run against a real LLM response**. Treat M10's first
+   `scripts/50_judge.py` run as the real shakedown of that code, not a
+   formality — budget time to fix a live-only bug in `judge/rubric_judge.py`
+   or `judge/report.py` if one surfaces (e.g. `RubricJudgment.model_validate
+   (result.output)` assumes the shape parses cleanly; a live model producing
+   a schema-valid-but-semantically-odd response is exactly the kind of thing
+   offline tests with hand-built fixtures can't catch).
+3. **`scripts/40_screen.py` has no `--cohort` flag** — plan §14's demo
+   command `python scripts/40_screen.py --cohort dme_fl_tx_ca --limit 250`
+   does not match the real CLI (`--limit` only; the cohort itself is fixed
+   config in `config/screening.yaml`'s `cohort:` block — taxonomy `"332"`,
+   states `["FL","TX","CA"]`, already the DME/FL/TX/CA cohort the plan's
+   `--cohort` flag would have selected). `README.md`'s demo section and any
+   `make demo` target should use the real invocation
+   (`python scripts/40_screen.py --limit 250`), not the plan's literal text
+   — copying the plan's command verbatim into the README would document a
+   flag that doesn't exist.
+4. **`cohort_select` returns 6,944 real DME providers (verified M6)** —
+   `--limit 250` slices the first 250 of that set. **Debt D-17 still stands:
+   the synthetic S01-S10 scenarios are invisible to a cohort-based run**
+   (no `HAS_TAXONOMY` edge), so the 250-provider run and the judge's
+   scenario-based evaluation are two genuinely separate populations, same as
+   M6/M9 already established — don't expect the 250-provider run to surface
+   any of S01-S10's planted patterns.
+5. **No `Makefile` exists yet** — `make demo` needs one written from
+   scratch. Keep it a thin wrapper over the existing scripts (bootstrap,
+   `docker compose up -d`, the cold run, the warm run, the judge run) —
+   plan §14's 8 steps map to shell commands almost directly; no new Python
+   needed for the Makefile itself.
+6. **No `scripts/00_bootstrap.sh` exists yet either.** `uv sync`, `docker
+   compose up -d` + health-wait, `scripts/06_bootstrap_neo4j_readonly.py`
+   (exists since M7 — the `specter_ro` read-only user setup), and a reminder
+   to populate `.env` from `.env.example` are the real prerequisites; don't
+   invent steps beyond what a genuinely clean checkout needs.
+7. **`config/models.yaml`'s `price_*` fields are still all `null` (debt
+   D-8), deliberately** — plan §7.4: "a wrong cost chart is worse than no
+   cost chart." Only fill them in if the operator explicitly supplies real
+   Azure/Vertex pricing this session; do not estimate or guess numbers to
+   make the dashboard's `$` column look populated. If the operator doesn't
+   supply pricing, leave D-8 open and say so in `README.md` rather than
+   silently dropping the cost column from the demo narrative.
+8. **The judge's own limitation block already states the Kimi-removal
+   rationale is superseded** (CLAUDE.md Amendment 2) — `README.md`'s
+   methodology section should describe *this* system's actual choice
+   (`judge_case_rubric` on `gpt-5.4`, self-preference bias mitigated by
+   deterministic-primary grading + blinding + calibration, cross-family
+   validation deferred to Phase 2), not plan §12.2's original "Kimi vs GPT"
+   framing, which Amendment 2 overrode before any code was written against
+   it. Getting this backwards in the README would misrepresent what the
+   system actually does.
+
+**File manifest.**
+| Path | Action | Notes |
+|---|---|---|
+| `README.md` | CREATE | Architecture overview, the amendments' rationale (SAM.gov removal, Kimi removal + self-preference mitigation, ZCTA not Maps), routing-transparency note, Cypher-injection-surface acknowledgement, `pip show google-adk` version, real demo instructions. |
+| `scripts/00_bootstrap.sh` | CREATE | ~30 lines. `uv sync`, `docker compose up -d` + health wait, `.env` reminder, `scripts/06_bootstrap_neo4j_readonly.py`. |
+| `Makefile` | CREATE | `demo` target wrapping plan §14's 8 steps as real shell commands against the real CLI surface (see Inherited Context point 3). |
+| `scripts/40_screen.py` | EDIT (maybe) | Only if you decide to add the same live-key check `scripts/50_judge.py` has — optional, see Inherited Context point 1. |
+| `config/models.yaml` | EDIT (maybe) | Only if the operator supplies real pricing — otherwise untouched, D-8 stays open. |
+| `data/cases/` | — (generated) | The 250-provider run's output — not committed as part of this Action Plan's diff; note the real count achieved in this file's Result section. |
+| `JudgeReport.md` | — (generated) | M9's still-open live checkpoint, produced this milestone. |
+
+**Read before writing.**
+1. `phase_1_build_plan.md` §14 (demo script) and §1 (non-goals) — what the
+   README needs to describe and what it must explicitly say Phase 1 does
+   *not* do.
+2. `CLAUDE.md` in full, including both amendments — the README's
+   methodology section is largely restating these amendments accurately,
+   not writing new content.
+3. `scripts/40_screen.py`, `scripts/50_judge.py` (M9) — the real CLI
+   surface the README/Makefile must document accurately, not the plan's.
+4. `NOTES_API_DEVIATIONS.md` — the real, load-bearing surprises (D1 Azure
+   v1 surface, D14 Vertex env forwarding, D19/D20 Neo4j MCP guardrails,
+   D21a/D21b state Medicaid sources) worth summarizing for a reader who
+   won't read the whole deviations log.
+5. `BUILD_MILESTONES.md` §4 Carried Debt in full — README's "known
+   limitations" section should be an honest summary of what's still open
+   (D-2 DOJ depth, D-8 pricing, D-17 synthetic/cohort disjointness), not a
+   claim that everything works.
+
+**Checkpoint.**
+```bash
+.venv/bin/python -c "..."          # confirm Azure key alive, fresh check (Inherited Context point 1)
+bash scripts/00_bootstrap.sh       # clean-machine setup completes
+python scripts/40_screen.py --limit 250     # cold run — record real timing/cost
+python scripts/40_screen.py --limit 250     # warm run — L1 hit rate should be visibly higher
+python -m specter.cli dashboard             # shows both runs' ledger rows
+python scripts/50_judge.py                  # JudgeReport.md, real n_caught/8
+pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+make demo                                    # reproduces the above end to end
+```
+→ `README.md` exists and accurately describes the real system, `JudgeReport.
+md` has real numbers (not the M9 401), `data/cases/` has ~250 new entries,
+`make demo` runs without manual intervention beyond `.env` being populated.
+
+**Traps.**
+- Don't copy plan §14's `--cohort dme_fl_tx_ca` flag into the README or
+  Makefile — it doesn't exist (Inherited Context point 3).
+- Don't write the README's judge-independence section around Kimi — Amendment
+  2 removed it before any code existed; describe the real gpt-5.4-grading-
+  gpt-5.4 mitigation stack instead.
+- A cold run against 250 real providers is a real cost line item at T1/T2
+  rates — don't loop `--limit 250` speculatively "to see if it's faster
+  warm"; one cold + one warm is the checkpoint, not N attempts.
+- If the Azure key is still dead, this milestone is `BLOCKED` for the same
+  reason M9 was — don't produce a README claiming a demo run that never
+  actually happened live.
+
+**Definition of done.**
+- [ ] Azure key confirmed live with a fresh check before any live step
+- [ ] Cold + warm `scripts/40_screen.py --limit 250` runs completed, real
+  numbers recorded (cost, cache hit rate, priority tier distribution)
+- [ ] `scripts/50_judge.py` produces a real `JudgeReport.md` — M9's own
+  live checkpoint finally exercised
+- [ ] `README.md`, `scripts/00_bootstrap.sh`, `Makefile` all exist and are
+  accurate to the real CLI surface
+- [ ] `pytest tests/ -q`, `ruff`, `mypy` all clean
+- [ ] §2 status row → `DONE` (or `BLOCKED` with reason); §3 Current State
+  replaced — this is the last milestone, so also do a final pass confirming
+  every debt in §4 is either cleared or has an honest, permanent disposition

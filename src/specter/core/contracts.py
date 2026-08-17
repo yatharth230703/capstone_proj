@@ -34,6 +34,9 @@ Currently defined:
   BUILD_MILESTONES.md, plan §9.7-9.8 `agents/skeptic.py`,
   `agents/case_reporter.py`)
 - CaseScore (M6 of BUILD_MILESTONES.md, plan §10 `workflow/state.ScoringService`)
+- CriterionScore, RubricJudgment, BlindedCase, JudgeVerdict, CalibrationCase,
+  ScenarioRecallResult, DetectionEvalReport (M9 of BUILD_MILESTONES.md, plan
+  §12 `judge/`)
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from specter.core.enums import (
     CacheLayer,
@@ -626,3 +629,121 @@ class ValidationReport(SpecterModel):
     date_range_sanity_ok: bool
     date_range_notes: str | None = None
     verdict: Verdict
+
+
+class CriterionScore(SpecterModel):
+    """One of `RubricJudgment.criteria` (M9, CLAUDE.md Amendment 2 mitigation
+    3 — verbatim schema). `weakness_found` may never be a placeholder: the
+    judge must name a real weakness or explain specifically why the criterion
+    is fully satisfied. `score` has no `default=`, same strict-mode rule
+    `RiskSignal` established (M3) — this is nested inside `RubricJudgment`,
+    itself an agent `output_schema`.
+    """
+
+    criterion: str
+    score: int = Field(ge=0, le=5)
+    supporting_quote: str
+    weakness_found: str
+
+    @field_validator("weakness_found")
+    @classmethod
+    def _reject_placeholder(cls, v: str) -> str:
+        if not v.strip() or v.strip().lower() == "none":
+            raise ValueError(
+                "weakness_found must name a real weakness, or explain "
+                'specifically why the criterion is fully satisfied — "none" '
+                "is rejected"
+            )
+        return v
+
+
+class RubricJudgment(AgentOutput):
+    """Output of one rubric-judge sample (M9, plan §12.2) — 5 criteria:
+    citation_validity, numeric_grounding, legal_discipline, counter_evidence,
+    hallucination. One real Azure call produces one of these;
+    `rubric_judge.py` runs 3 independent samples and folds them into a
+    `JudgeVerdict`.
+    """
+
+    criteria: list[CriterionScore]
+
+
+class BlindedCase(SpecterModel):
+    """`CasePacket` with every provenance-bearing field stripped (CLAUDE.md
+    Amendment 2 mitigation 2). Mirrors `CasePacket` field for field —
+    `judge/blind.py`'s `blind_case` is what actually proves nothing leaks,
+    not this shape (a real `CasePacket` already carries no agent/model/tier
+    field, verified against `data/cases/*.json`).
+    """
+
+    provider_npi: str
+    narrative: str
+    signals: list[RiskSignal]
+    enforcement_matches: list[str]
+    legal_status_per_match: list[CaseLegalStatus]
+    counter_evidence: CounterEvidence
+    citation_report: CitationReport
+    created_at: datetime
+
+
+class JudgeVerdict(SpecterModel):
+    """One provider's full judge result (M9): 3 `RubricJudgment` samples plus
+    the variance/aggregation Amendment 2 mitigation 5 requires. Assembled in
+    plain Python from 3 real LLM calls, never itself an agent `output_schema`
+    — `dict[str, float]` is fine here (D13's strict-mode ban only applies to
+    a model Azure validates as structured *output*).
+    """
+
+    provider_npi: str
+    samples: list[RubricJudgment]
+    per_criterion_variance: dict[str, float]
+    low_reliability_criteria: list[str]
+    aggregate_scores: dict[str, float]
+
+
+class CalibrationCase(SpecterModel):
+    """One entry of CLAUDE.md Amendment 2's C01-C10 table (M9,
+    `judge/calibration_fixtures.py`). `injected_defect`/`expected_criterion`
+    are `None` only for the two controls (C09/C10) — everything else names
+    exactly one deliberately-injected defect and the criterion that must
+    catch it.
+    """
+
+    fixture_id: str
+    description: str
+    injected_defect: str | None
+    expected_criterion: str | None
+    case: CasePacket
+
+
+class ScenarioRecallResult(SpecterModel):
+    """One synthetic scenario's detection outcome (M9, plan §12.1's headline
+    metric). `detector_exists=False` for S01/S08, which have no Phase 1
+    detector by design (plan's own `expected_signals=[]`) — `recall_hit` is
+    `True` for those (correctly producing zero signals is correct behavior,
+    not a miss), reported separately from the 8 scenarios with a real
+    detector so the headline number isn't inflated by scenarios that were
+    never detectable in the first place.
+    """
+
+    scenario_id: str
+    expected_signals: list[str]
+    fired_signal_types: list[str]
+    detector_exists: bool
+    recall_hit: bool
+
+
+class DetectionEvalReport(SpecterModel):
+    """Output of `judge/detection_eval.py` (M9, plan §12.1) — deterministic,
+    no LLM. `real_positive_denominator` is reported alongside
+    `real_positive_count` explicitly (BUILD_MILESTONES.md debt D-21: only 4
+    real non-synthetic positives exist out of 8,445 real providers) so a
+    small-sample precision number never appears without its true denominator.
+    """
+
+    precision_at_k: dict[str, float]
+    scenario_recall: list[ScenarioRecallResult]
+    real_positive_count: int
+    real_positive_denominator: int
+    ranking_method: str
+    false_positive_rate: float | None
