@@ -2,19 +2,21 @@
 already-screened `data/cases/*.json` `CasePacket`s — no new screening
 happens here (CLAUDE.md Amendment 4(a)).
 
-**Debt D-23 — `CaseScore`/`priority_tier` is never persisted**
-(`workflow/screening.py:175` writes only the `CasePacket`; `case_score` is
-computed, printed, and discarded). Per M13's Action Plan point 4, option
-(b): recomputed here via the same `workflow.state.ScoringService` the
-screening run itself used, with `entity_adjudications=[]` — the one input
-`ScoringService.score` needs that was never persisted anywhere for a
-completed case. Every *other* input is fully persisted and this recompute
-uses it exactly: `signals`, `enforcement_matches`/`legal_status_per_match`,
-and the Skeptic's `confidence_adjustment` (`CasePacket.counter_evidence`).
-So the recomputed `identity_integrity` dimension — and only that one — is an
-approximation (it assumes zero unresolved entity-match conflicts). Every
-response says so explicitly via `priority_tier_approximate: true`. Do not
-present this as the exact score `scripts/40_screen.py` computed live.
+**Debt D-23 — `CaseScore`/`priority_tier` wasn't persisted, closed for real
+post-M14.** `workflow/screening.py` now writes `<npi>.score.json` alongside
+`<npi>.json` (the `case_score.model_dump_json()` verbatim), so a case
+screened after that fix carries its *exact* score, not a recomputation.
+Cases screened before the fix (or in a test fixture that only writes the
+packet) have no score file — for those, this module falls back to the same
+recompute it always used: `workflow.state.ScoringService.score` with
+`entity_adjudications=[]`, the one input never persisted anywhere for a
+completed case (every other input — `signals`,
+`enforcement_matches`/`legal_status_per_match`, the Skeptic's
+`confidence_adjustment` — is fully persisted and the recompute uses it
+exactly). `_score_for` returns which happened; every response says so
+explicitly, per-case, via `priority_tier_approximate` — never presented as
+exact when it isn't, and never presented as approximate when a real
+persisted score is available.
 """
 
 from __future__ import annotations
@@ -39,12 +41,17 @@ CASES_DIR = _REPO_ROOT / "data" / "cases"
 SCREENING_CONFIG_PATH = _REPO_ROOT / "config" / "screening.yaml"
 _GRAPH_COUNT_LABELS = ["Provider", "Address", "Community", "Exclusion"]
 
-_PRIORITY_TIER_APPROXIMATION_NOTE = (
+_PRIORITY_TIER_APPROXIMATE_NOTE = (
     "priority_tier recomputed from the persisted CasePacket without "
-    "entity_adjudications (BUILD_MILESTONES.md debt D-23 — not persisted by "
-    "the screening run); identity_integrity assumes zero unresolved "
-    "entity-match conflicts and may differ from the score the live "
-    "screening run actually computed"
+    "entity_adjudications — no <npi>.score.json exists for this case (it was "
+    "screened before D-23's persistence fix landed); identity_integrity "
+    "assumes zero unresolved entity-match conflicts and may differ from the "
+    "score the live screening run actually computed"
+)
+_PRIORITY_TIER_EXACT_NOTE = (
+    "priority_tier read from <npi>.score.json — persisted by the live "
+    "screening run itself (workflow/screening.py), not recomputed "
+    "(BUILD_MILESTONES.md debt D-23, closed)"
 )
 
 
@@ -54,7 +61,11 @@ def _require_cases() -> list[Path]:
             f"{CASES_DIR} is missing — it's a gitignored run artifact. Run "
             "`python scripts/40_screen.py` to populate it (real Azure calls)."
         )
-    paths = sorted(CASES_DIR.glob("*.json"))
+    # `*.json` also matches the `<npi>.score.json` files workflow/screening.py
+    # now writes alongside each packet (D-23) — excluded explicitly, not by
+    # a stricter glob, since `.score.json` is a real, deliberate suffix
+    # rather than something a glob pattern alone can express cleanly.
+    paths = sorted(p for p in CASES_DIR.glob("*.json") if not p.name.endswith(".score.json"))
     if not paths:
         raise SpecterError(
             f"{CASES_DIR} exists but has no case files — run "
@@ -93,6 +104,24 @@ def _approximate_score(case: CasePacket, scoring: ScoringService) -> CaseScore:
     )
 
 
+def _load_persisted_score(npi: str) -> CaseScore | None:
+    path = CASES_DIR / f"{npi}.score.json"
+    if not path.exists():
+        return None
+    return CaseScore.model_validate(json.loads(path.read_text()))
+
+
+def _score_for(case: CasePacket, scoring: ScoringService) -> tuple[CaseScore, bool]:
+    """Returns `(score, approximate)`. Prefers the exact score
+    `workflow/screening.py` persists post-D-23; falls back to
+    `_approximate_score` for a case screened before that fix landed.
+    """
+    persisted = _load_persisted_score(case.provider_npi)
+    if persisted is not None:
+        return persisted, False
+    return _approximate_score(case, scoring), True
+
+
 def _graph_counts(driver: Driver) -> dict[str, int]:
     counts: dict[str, int] = {}
     with driver.session() as session:
@@ -117,6 +146,7 @@ def cohort_overview(request: Request) -> dict[str, Any]:
     signal_type_counts: dict[str, int] = {}
     cases_with_fired_signals = 0
     cases: list[dict[str, Any]] = []
+    exact_count = 0
     for path in paths:
         case = _load_case(path)
         if case.signals:
@@ -125,12 +155,14 @@ def cohort_overview(request: Request) -> dict[str, Any]:
             signal_type_counts[signal.signal_type] = (
                 signal_type_counts.get(signal.signal_type, 0) + 1
             )
-        score = _approximate_score(case, scoring)
+        score, approximate = _score_for(case, scoring)
+        exact_count += 0 if approximate else 1
         tier_counts[score.priority_tier.value] += 1
         cases.append(
             {
                 "npi": case.provider_npi,
                 "priority_tier": score.priority_tier.value,
+                "priority_tier_exact": not approximate,
                 "signal_count": len(case.signals),
                 "signal_types": sorted({s.signal_type for s in case.signals}),
             }
@@ -142,8 +174,13 @@ def cohort_overview(request: Request) -> dict[str, Any]:
         "cases_with_fired_signals": cases_with_fired_signals,
         "signal_type_counts": signal_type_counts,
         "priority_tier_counts": tier_counts,
-        "priority_tier_approximate": True,
-        "priority_tier_approximation_note": _PRIORITY_TIER_APPROXIMATION_NOTE,
+        "cases_with_exact_priority_tier": exact_count,
+        "priority_tier_approximate": exact_count < len(paths),
+        "priority_tier_approximation_note": (
+            _PRIORITY_TIER_EXACT_NOTE
+            if exact_count == len(paths)
+            else _PRIORITY_TIER_APPROXIMATE_NOTE
+        ),
         "graph_counts": _graph_counts(request.app.state.driver),
         "cases": cases,
     }
@@ -156,12 +193,14 @@ def case_detail(npi: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"no persisted case for provider {npi}")
     case = _load_case(path)
     scoring = _scoring_service()
-    score = _approximate_score(case, scoring)
+    score, approximate = _score_for(case, scoring)
     anomaly = score_or_error(npi, request.app.state.driver)
     return {
         "case": case.model_dump(mode="json"),
         "case_score": score.model_dump(mode="json"),
-        "priority_tier_approximate": True,
-        "priority_tier_approximation_note": _PRIORITY_TIER_APPROXIMATION_NOTE,
+        "priority_tier_approximate": approximate,
+        "priority_tier_approximation_note": (
+            _PRIORITY_TIER_APPROXIMATE_NOTE if approximate else _PRIORITY_TIER_EXACT_NOTE
+        ),
         "anomaly_score": anomaly.model_dump(mode="json"),
     }

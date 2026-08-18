@@ -240,7 +240,15 @@ def test_cohort_real_corpus_tier_counts_sum_to_total(driver: Driver) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert sum(body["priority_tier_counts"].values()) == body["total_cases"]
-    assert body["priority_tier_approximate"] is True
+    # D-23: some cases in the real corpus may have an exact, persisted score
+    # (workflow/screening.py writes <npi>.score.json since the fix landed)
+    # and some may still be falling back to the approximate recompute (cases
+    # screened before that fix) — either is valid, but the two counts must
+    # be internally consistent and the flag/count must agree.
+    assert 0 <= body["cases_with_exact_priority_tier"] <= body["total_cases"]
+    assert body["priority_tier_approximate"] == (
+        body["cases_with_exact_priority_tier"] < body["total_cases"]
+    )
     for label in ("provider", "address", "community", "exclusion"):
         assert body["graph_counts"][label] >= 0
 
@@ -258,7 +266,14 @@ def test_case_detail_real_case_carries_d28_limitations_verbatim(
     assert resp.status_code == 200
     body = resp.json()
     assert body["case"]["provider_npi"] == real_case_npi
-    assert body["priority_tier_approximate"] is True
+    # D-23: True (recomputed, no <npi>.score.json yet) or False (exact,
+    # persisted by a live screening run) are both valid — the note just has
+    # to match which one actually happened.
+    assert isinstance(body["priority_tier_approximate"], bool)
+    if body["priority_tier_approximate"]:
+        assert "D-23" in body["priority_tier_approximation_note"]
+    else:
+        assert "persisted" in body["priority_tier_approximation_note"]
     anomaly = body["anomaly_score"]
     assert anomaly["training_set_description"] != ""
     assert "not_a_fraud_probability" in anomaly["known_limitations"]

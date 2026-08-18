@@ -16,7 +16,9 @@ in the template.</p>
 </div>
 
 <h2>Priority tier distribution</h2>
-<p class="note">{{ cohort.priority_tier_approximation_note }}</p>
+<p class="note">{{ cohort.priority_tier_approximation_note }}
+({{ cohort.cases_with_exact_priority_tier }}/{{ cohort.total_cases }} cases have an exact,
+persisted score — debt D-23.)</p>
 {% for tier in ["high_priority", "standard", "low"] %}
 <div class="bar-row">
   <span>{{ tier }}</span>
@@ -25,11 +27,21 @@ in the template.</p>
   <span>{{ cohort.priority_tier_counts[tier] }}</span>
 </div>
 {% endfor %}
+{% if cohort.priority_tier_counts.high_priority == 0 %}
 <p class="note">Zero <code>high_priority</code> cases is a real, unaltered result
 (debt D-24): the escalation gate requires 3 of 4 independent signal families to
 fire together, and no case in this corpus currently does. This is the gate
 working as designed, not a missing feature — see <code>config/screening.yaml</code>'s
 <code>escalation_gate</code> block.</p>
+{% else %}
+<p class="note">{{ cohort.priority_tier_counts.high_priority }}
+<code>high_priority</code> case(s) — real, unaltered results (debt D-24, re-measured):
+the escalation gate requires 3 of 4 independent signal families to fire together,
+plus an authoritative source or a strong quantitative anomaly, no unresolved
+entity-match conflict, and fresh evidence. These cases met all four. This number is
+never tuned to look better or worse — see <code>config/screening.yaml</code>'s
+<code>escalation_gate</code> block and the per-case drill-down for the real signals.</p>
+{% endif %}
 
 <h2>Signal type distribution</h2>
 {% for signal_type, count in cohort.signal_type_counts.items() %}
@@ -58,16 +70,18 @@ has not been filled in (debt D-8).</p>
 </table>
 
 <h2>Cases</h2>
-<p class="note">Sorted by fired-signal count, most first. <code>priority_tier</code>
-here is the same approximated value described above.</p>
+<p class="note">Sorted by fired-signal count, most first. "Exact" means
+<code>priority_tier</code> was read from a persisted <code>&lt;npi&gt;.score.json</code>
+(D-23, closed); "approx" means it was recomputed for a case screened before that fix.</p>
 <table>
-<tr><th>NPI</th><th>Tier</th><th>Signals</th><th>Signal types</th></tr>
+<tr><th>NPI</th><th>Tier</th><th>Signals</th><th>Signal types</th><th>Score</th></tr>
 {% for case in cohort.cases %}
 <tr>
   <td><a class="npi" href="/ui/cases/{{ case.npi }}">{{ case.npi }}</a></td>
   <td><span class="badge {{ case.priority_tier }}">{{ case.priority_tier }}</span></td>
   <td>{{ case.signal_count }}</td>
   <td>{{ case.signal_types | join(", ") }}</td>
+  <td>{{ "exact" if case.priority_tier_exact else "approx" }}</td>
 </tr>
 {% endfor %}
 </table>

@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Provider {{ detail.case.provider_npi }}
   <span class="badge {{ detail.case_score.priority_tier }}">{{ detail.case_score.priority_tier }}</span>
+  <span class="note">({{ "approx" if detail.priority_tier_approximate else "exact" }})</span>
 </h1>
 <p class="note">{{ detail.priority_tier_approximation_note }}</p>
 

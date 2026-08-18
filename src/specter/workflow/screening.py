@@ -173,6 +173,13 @@ def build_screening_workflow(
             return {"npi": npi, "status": "rejected", "rejection_reason": str(exc)}
 
         (cases_dir / f"{npi}.json").write_text(case_packet.model_dump_json(indent=2))
+        # D-23 (BUILD_MILESTONES.md): CaseScore was computed and returned up
+        # to the caller but never persisted, so the M13 dashboard API could
+        # only ever approximate priority_tier from the CasePacket alone
+        # (entity_adjudications isn't stored anywhere else). Persisting it
+        # alongside the packet is what lets a later API read the exact score
+        # this run actually computed.
+        (cases_dir / f"{npi}.score.json").write_text(case_score.model_dump_json(indent=2))
 
         return {
             "npi": npi,

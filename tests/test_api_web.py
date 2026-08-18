@@ -236,7 +236,10 @@ def test_case_page_real_case_renders_d28_disclosure_and_no_banned_words(
     assert real_case_npi in body
     assert "not_a_fraud_probability" in body
     assert "D-28" in body or "AUC 0.556" in body
-    assert "priority_tier recomputed" in body  # D-23 note
+    # D-23: either the approximate-recompute note or the exact-persisted
+    # note is correct, depending on whether this case has a real
+    # <npi>.score.json — both mention "priority_tier" in the note's opening.
+    assert "priority_tier recomputed" in body or "priority_tier read from" in body
     assert find_banned_phrases(body) == []
 
 
@@ -249,7 +252,8 @@ def test_cohort_page_real_corpus_renders_all_cases_linked(driver: Driver) -> Non
         resp = client.get("/ui")
     assert resp.status_code == 200
     n_links = resp.text.count('href="/ui/cases/')
-    assert n_links == len(list(CASES_DIR.glob("*.json")))
+    packets = [p for p in CASES_DIR.glob("*.json") if not p.name.endswith(".score.json")]
+    assert n_links == len(packets)
 
 
 def test_judge_page_real_report_renders(driver: Driver) -> None:
