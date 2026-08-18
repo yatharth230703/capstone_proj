@@ -65,6 +65,7 @@ from specter.agents.skeptic import challenge
 from specter.core.contracts import ScreeningThresholds
 from specter.core.enums import Verdict
 from specter.core.errors import SpecterError
+from specter.graph.enforcement_loader import update_legal_status_from_adjudications
 from specter.workflow.state import ScoringService, build_candidate_pairs, cohort_select
 
 logger = structlog.get_logger(__name__)
@@ -163,6 +164,10 @@ def build_screening_workflow(
                 evidence_dir,
                 runtime,
             )
+            # D-10 (BUILD_MILESTONES.md): the graph node, not just the case
+            # packet, should carry the agent's real adjudicated legal_status
+            # once one exists — see graph/enforcement_loader.py's docstring.
+            update_legal_status_from_adjudications(driver, case_packet.legal_status_per_match)
         except SpecterError as exc:
             # Visible, not silent: logged loudly and present in the run's own
             # summary output, labelled `rejected` — see this module's

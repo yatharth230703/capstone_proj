@@ -64,6 +64,29 @@ def test_cohort_select_limit_slices_the_sorted_list(driver: Driver) -> None:
     assert limited == full[:3]
 
 
+def test_cohort_select_excludes_synthetic_providers_explicitly(driver: Driver) -> None:
+    """D-17: a production screening cohort must never depend on the
+    accidental absence of a `HAS_TAXONOMY` edge on synthetic providers to
+    stay real-data-only — `cohort_select` filters `data_origin='public'`
+    explicitly now. Every synthetic scenario provider carries a
+    `taxonomy_code` starting with "332" in its raw data (`ingest/
+    synthetic.py`), so this only proves something if the graph actually has
+    synthetic providers with a real taxonomy prefix loaded.
+    """
+    npis = cohort_select(driver, "332", ["FL", "TX", "CA"])
+    with driver.session() as session:
+        synthetic_in_cohort = session.run(
+            """
+            UNWIND $npis AS npi
+            MATCH (p:Provider {npi: npi})
+            WHERE p.data_origin = 'synthetic'
+            RETURN count(p) AS n
+            """,
+            npis=npis,
+        ).single()["n"]
+    assert synthetic_in_cohort == 0
+
+
 def test_build_candidate_pairs_finds_s03_address_cluster_peers(driver: Driver) -> None:
     pairs = build_candidate_pairs(driver, ["9030000000"])
     assert pairs

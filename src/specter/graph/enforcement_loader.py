@@ -19,7 +19,9 @@ import polars as pl
 import structlog
 from neo4j import Driver
 
+from specter.core.contracts import CaseLegalStatus
 from specter.core.enums import DataOrigin, LegalStatus
+from specter.core.errors import SpecterError
 from specter.core.hashing import sha256_text
 from specter.graph.embeddings import embed_texts
 from specter.settings import Settings
@@ -124,3 +126,44 @@ def load_enforcement_cases(driver: Driver, snapshot_dir: Path, settings: Setting
 
     logger.info("graph.enforcement_cases_loaded", count=len(rows))
     return len(rows)
+
+
+def update_legal_status_from_adjudications(
+    driver: Driver, adjudications: list[CaseLegalStatus]
+) -> int:
+    """Writes the Enforcement Intelligence Agent's real per-match
+    adjudication (`CasePacket.legal_status_per_match`, plan §9.5) onto the
+    `EnforcementCase` node it corresponds to (BUILD_MILESTONES.md debt D-10).
+
+    `infer_legal_status`'s keyword heuristic is a conservative default for a
+    case no agent has ever adjudicated — CLAUDE.md hard rule 6 means it must
+    never overclaim, so it defaults to `ALLEGED`. Once a real adjudication
+    exists for a case, the node should carry that, not keep serving the
+    heuristic's guess to every future reader who queries the graph directly
+    instead of going through a `CasePacket`. Every `case_id` here already
+    resolved through `evidence_tools.validate_citations` before the packet
+    was assembled, so a `MATCH` that doesn't hit is a real bug — fails
+    loudly (hard rule 7) rather than silently dropping the write.
+    """
+    if not adjudications:
+        return 0
+    rows = [{"case_id": a.case_id, "legal_status": a.legal_status.value} for a in adjudications]
+    with driver.session() as session:
+        record = session.run(
+            """
+            UNWIND $rows AS row
+            MATCH (c:EnforcementCase {case_id: row.case_id})
+            SET c.legal_status = row.legal_status
+            RETURN count(c) AS n
+            """,
+            rows=rows,
+        ).single()
+    updated = int(record["n"]) if record else 0
+    if updated != len(rows):
+        raise SpecterError(
+            f"legal_status write-back matched {updated}/{len(rows)} EnforcementCase nodes — "
+            f"a case_id in {sorted({r['case_id'] for r in rows})} doesn't resolve to a real "
+            "graph node (CLAUDE.md hard rule 3: no fabricated identifiers)"
+        )
+    logger.info("graph.legal_status_updated", count=updated)
+    return updated

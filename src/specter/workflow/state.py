@@ -32,10 +32,20 @@ def cohort_select(
 ) -> list[str]:
     """`config/screening.yaml`'s `cohort` block, as Cypher. Sorted by npi so
     the cohort — and any `limit` slice of it — is reproducible run to run.
+
+    `p.data_origin = 'public'` is explicit, not incidental (BUILD_MILESTONES.md
+    debt D-17). Synthetic scenario providers (S01-S10) carry no `HAS_TAXONOMY`
+    edge today, so this filter is currently redundant with that gap — but a
+    live production screening cohort must never depend on an accident of the
+    synthetic loader to keep synthetic providers out. Anything that needs a
+    synthetic scenario queries by `scenario_id` directly (M3/M5/M9's own smoke
+    scripts and `scripts/50_judge.py` already do this), never through this
+    taxonomy-based cohort path.
     """
     query = """
         MATCH (p:Provider)-[:HAS_TAXONOMY]->(t:Taxonomy)
         WHERE t.code STARTS WITH $prefix AND p.state IN $states
+          AND p.data_origin = 'public'
         RETURN DISTINCT p.npi AS npi
         ORDER BY npi
     """
