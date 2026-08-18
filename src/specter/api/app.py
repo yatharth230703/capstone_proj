@@ -53,7 +53,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    from specter.api import cases, costs, judge, ml, research
+    from specter.api import cases, costs, judge, ml, research, web
 
     app = FastAPI(title="Specter Dashboard Data API", lifespan=_lifespan)
 
@@ -70,6 +70,10 @@ def create_app() -> FastAPI:
     app.include_router(judge.router)
     app.include_router(ml.router)
     app.include_router(research.router)
+    # M14: the judge-facing HTML UI, mounted under /ui so it never collides
+    # with the JSON routes above (GET /cohort, /cases/{npi}, /judge, /ml/{npi}
+    # all stay JSON; /ui/... renders the same data as server-rendered HTML).
+    app.include_router(web.router)
     return app
 
 

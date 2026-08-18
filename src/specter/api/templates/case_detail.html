@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Case {{ detail.case.provider_npi }}{% endblock %}
+{% block content %}
+<h1>Provider {{ detail.case.provider_npi }}
+  <span class="badge {{ detail.case_score.priority_tier }}">{{ detail.case_score.priority_tier }}</span>
+</h1>
+<p class="note">{{ detail.priority_tier_approximation_note }}</p>
+
+<h2>Narrative</h2>
+<pre>{{ detail.case.narrative }}</pre>
+
+<h2>Fired signals ({{ detail.case.signals | length }})</h2>
+{% if detail.case.signals %}
+<table>
+<tr><th>Type</th><th>Value</th><th>Threshold</th><th>Data origin</th><th>Detected</th><th>Known limitations</th></tr>
+{% for s in detail.case.signals %}
+<tr>
+  <td>{{ s.signal_type }}</td><td>{{ s.value }}</td><td>{{ s.threshold }}</td>
+  <td>{{ s.data_origin }}</td><td>{{ s.detected_at }}</td>
+  <td>{{ s.known_limitations | join(", ") }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="note">No signals fired for this provider.</p>
+{% endif %}
+
+<h2>Skeptic counter-evidence</h2>
+<p class="note">Confidence adjustment: {{ detail.case.counter_evidence.confidence_adjustment }}
+(bounded to [-0.4, 0.0] — CLAUDE.md hard rule 8, the only LLM-influenced
+number in this system besides the narrative prose itself).</p>
+{% for r in detail.case.counter_evidence.per_signal %}
+<div class="panel">
+  <strong>{{ r.signal_type }}</strong> — plausible benign explanation:
+  {{ "no" if r.no_plausible_benign_explanation else "yes" }}
+  {% if r.benign_explanation %}<p>{{ r.benign_explanation }}</p>{% endif %}
+  <p class="note">{{ r.reasoning }}</p>
+</div>
+{% endfor %}
+{% if detail.case.counter_evidence.unresolved_conflicts %}
+<p><strong>Unresolved conflicts:</strong></p>
+<ul>{% for c in detail.case.counter_evidence.unresolved_conflicts %}<li>{{ c }}</li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Citations</h2>
+<p class="note">{{ detail.case.citation_report.resolved_citations }}/{{ detail.case.citation_report.total_citations }}
+resolved. All resolved: {{ detail.case.citation_report.all_resolved }}.</p>
+
+<h2>Enforcement matches</h2>
+{% if detail.case.enforcement_matches %}
+<table>
+<tr><th>Case ID</th><th>Legal status</th></tr>
+{% for m in detail.case.legal_status_per_match %}
+<tr><td>{{ m.case_id }}</td><td>{{ m.legal_status }}</td></tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="note">None.</p>
+{% endif %}
+
+<h2>Structural anomaly score (M12, dashboard-only — not part of scoring)</h2>
+<div class="panel">
+  <p><strong>{{ "%.3f"|format(detail.anomaly_score.anomaly_score) }}</strong>
+  — model <code>{{ detail.anomaly_score.model_version }}</code>,
+  data origin <code>{{ detail.anomaly_score.data_origin }}</code></p>
+  <p class="note">Structural anomaly score, weak separation on held-out synthetic
+  evaluation (AUC 0.556, debt D-28) — not a fraud probability, not validated,
+  never presented as an indicator of wrongdoing.</p>
+  <p class="note"><strong>Known limitations:</strong>
+  {{ detail.anomaly_score.known_limitations | join(", ") }}</p>
+  <p class="note"><strong>Training set:</strong> {{ detail.anomaly_score.training_set_description }}</p>
+</div>
+
+<h2>Live grounded research</h2>
+<p class="note">Makes a real, billed Vertex Gemini call — user-triggered only,
+never fired automatically on page load. Its cost is recorded in the LLM call
+ledger like every other call.</p>
+<div class="panel">
+  <input type="text" id="research-query"
+    placeholder="e.g. NPI {{ detail.case.provider_npi }} Florida Medicaid exclusion history">
+  <p></p>
+  <button id="research-btn" onclick="runResearch()">Run grounded research</button>
+  <div id="research-result"></div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+async function runResearch() {
+  const btn = document.getElementById('research-btn');
+  const out = document.getElementById('research-result');
+  const query = document.getElementById('research-query').value.trim();
+  if (!query) { out.innerHTML = '<p class="error">Enter a query first.</p>'; return; }
+  btn.disabled = true;
+  btn.textContent = 'Running (real Vertex call)...';
+  out.innerHTML = '';
+  try {
+    const resp = await fetch('/research', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query})
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      out.innerHTML = '<p class="error">' + escapeHtml(data.detail || String(resp.status)) + '</p>';
+      return;
+    }
+    let html = '<h3>Narrative</h3><pre>' + escapeHtml(data.narrative) + '</pre>';
+    html += '<h3>Citations (' + data.citations.length + ')</h3>';
+    html += '<p class="note">' + escapeHtml(data.citation_disclosure) + '</p>';
+    if (data.citations.length) {
+      html += '<ul>';
+      for (const c of data.citations) {
+        html += '<li><code>' + escapeHtml(c.artifact_id.slice(0, 16)) + '...</code> stored at '
+          + escapeHtml(c.stored_path) + '</li>';
+      }
+      html += '</ul>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = '<p class="error">' + escapeHtml(String(e)) + '</p>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run grounded research';
+  }
+}
+</script>
+{% endblock %}

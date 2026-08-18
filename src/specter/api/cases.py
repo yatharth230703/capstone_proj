@@ -104,12 +104,19 @@ def _graph_counts(driver: Driver) -> dict[str, int]:
 
 @router.get("/cohort")
 def cohort_overview(request: Request) -> dict[str, Any]:
+    """`cases` (added building M14 — the Action Plan's own File Manifest
+    didn't list `api/cases.py` as an edit, but the UI's cohort page needs a
+    linkable per-case list and `/cohort` previously returned only counts;
+    see BUILD_MILESTONES.md M14 Result) is sorted most-signals-first so the
+    most interesting cases surface without any client-side sort.
+    """
     paths = _require_cases()
     scoring = _scoring_service()
 
     tier_counts = {"high_priority": 0, "standard": 0, "low": 0}
     signal_type_counts: dict[str, int] = {}
     cases_with_fired_signals = 0
+    cases: list[dict[str, Any]] = []
     for path in paths:
         case = _load_case(path)
         if case.signals:
@@ -120,6 +127,15 @@ def cohort_overview(request: Request) -> dict[str, Any]:
             )
         score = _approximate_score(case, scoring)
         tier_counts[score.priority_tier.value] += 1
+        cases.append(
+            {
+                "npi": case.provider_npi,
+                "priority_tier": score.priority_tier.value,
+                "signal_count": len(case.signals),
+                "signal_types": sorted({s.signal_type for s in case.signals}),
+            }
+        )
+    cases.sort(key=lambda c: (-c["signal_count"], c["npi"]))
 
     return {
         "total_cases": len(paths),
@@ -129,6 +145,7 @@ def cohort_overview(request: Request) -> dict[str, Any]:
         "priority_tier_approximate": True,
         "priority_tier_approximation_note": _PRIORITY_TIER_APPROXIMATION_NOTE,
         "graph_counts": _graph_counts(request.app.state.driver),
+        "cases": cases,
     }
 
 

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Cohort overview{% endblock %}
+{% block content %}
+<h1>Cohort overview</h1>
+<p class="note">Every number below is read live from <code>data/cases/*.json</code>,
+<code>data/ledger.sqlite</code>, and Neo4j — nothing on this page is computed
+in the template.</p>
+
+<div class="stat-row">
+  <div class="stat"><span class="n">{{ cohort.total_cases }}</span><span class="l">total cases</span></div>
+  <div class="stat"><span class="n">{{ cohort.cases_with_fired_signals }}</span><span class="l">cases with &ge;1 fired signal</span></div>
+  <div class="stat"><span class="n">{{ cohort.graph_counts.provider }}</span><span class="l">Provider nodes</span></div>
+  <div class="stat"><span class="n">{{ cohort.graph_counts.address }}</span><span class="l">Address nodes</span></div>
+  <div class="stat"><span class="n">{{ cohort.graph_counts.community }}</span><span class="l">Community nodes</span></div>
+  <div class="stat"><span class="n">{{ cohort.graph_counts.exclusion }}</span><span class="l">Exclusion nodes</span></div>
+</div>
+
+<h2>Priority tier distribution</h2>
+<p class="note">{{ cohort.priority_tier_approximation_note }}</p>
+{% for tier in ["high_priority", "standard", "low"] %}
+<div class="bar-row">
+  <span>{{ tier }}</span>
+  <div class="bar-track"><div class="bar-fill {{ tier }}"
+    style="width: {{ (cohort.priority_tier_counts[tier] / max_tier_count * 100) if max_tier_count else 0 }}%"></div></div>
+  <span>{{ cohort.priority_tier_counts[tier] }}</span>
+</div>
+{% endfor %}
+<p class="note">Zero <code>high_priority</code> cases is a real, unaltered result
+(debt D-24): the escalation gate requires 3 of 4 independent signal families to
+fire together, and no case in this corpus currently does. This is the gate
+working as designed, not a missing feature — see <code>config/screening.yaml</code>'s
+<code>escalation_gate</code> block.</p>
+
+<h2>Signal type distribution</h2>
+{% for signal_type, count in cohort.signal_type_counts.items() %}
+<div class="bar-row">
+  <span>{{ signal_type }}</span>
+  <div class="bar-track"><div class="bar-fill"
+    style="width: {{ (count / max_signal_count * 100) if max_signal_count else 0 }}%"></div></div>
+  <span>{{ count }}</span>
+</div>
+{% endfor %}
+
+<h2>LLM call ledger</h2>
+<p class="note">Overall cache hit rate {{ "%.0f"|format(costs.overall_cache_hit_rate * 100) }}%
+across {{ costs.total_calls }} recorded calls. <code>cost_usd</code> is
+<code>-</code>, never <code>$0.00</code>, wherever real Foundry/Vertex pricing
+has not been filled in (debt D-8).</p>
+<table>
+<tr><th>Agent</th><th>Tier</th><th>Calls</th><th>Cache hit%</th><th>Cost (USD)</th></tr>
+{% for row in costs.rows %}
+<tr>
+  <td>{{ row.agent }}</td><td>{{ row.tier }}</td><td>{{ row.calls }}</td>
+  <td>{{ "%.0f"|format(row.cache_hit_rate * 100) }}%</td>
+  <td>{{ "-" if row.cost_usd is none else "$%.4f"|format(row.cost_usd) }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h2>Cases</h2>
+<p class="note">Sorted by fired-signal count, most first. <code>priority_tier</code>
+here is the same approximated value described above.</p>
+<table>
+<tr><th>NPI</th><th>Tier</th><th>Signals</th><th>Signal types</th></tr>
+{% for case in cohort.cases %}
+<tr>
+  <td><a class="npi" href="/ui/cases/{{ case.npi }}">{{ case.npi }}</a></td>
+  <td><span class="badge {{ case.priority_tier }}">{{ case.priority_tier }}</span></td>
+  <td>{{ case.signal_count }}</td>
+  <td>{{ case.signal_types | join(", ") }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endblock %}

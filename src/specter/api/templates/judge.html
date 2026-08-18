@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Judge report{% endblock %}
+{% block content %}
+<h1>Judge report</h1>
+<div class="limitation">{{ judge.limitation_block }}</div>
+{% for title, body in judge.sections.items() %}
+<h2>{{ title }}</h2>
+<pre>{{ body }}</pre>
+{% endfor %}
+{% endblock %}
