@@ -34,6 +34,8 @@ a `sub_agent` of a tool-bearing agent. Consumers must call
 from __future__ import annotations
 
 import os
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -44,8 +46,10 @@ from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.google_search_tool import google_search
 from google.genai import types
 
-from specter.core.contracts import EvidenceArtifact, GroundedResearchResult
+from specter.core.contracts import EvidenceArtifact, GroundedResearchResult, LlmCallRecord
+from specter.core.enums import CacheLayer
 from specter.core.hashing import sha256_text
+from specter.llm.ledger import CostLedger, compute_cost
 from specter.llm.router import ModelRouter
 from specter.settings import Settings
 from specter.tools.evidence_tools import store_artifact
@@ -103,7 +107,13 @@ def build_grounded_research_tool(agent: LlmAgent) -> AgentTool:
 
 
 async def research_topic(
-    query: str, agent: LlmAgent, evidence_dir: Path
+    query: str,
+    agent: LlmAgent,
+    evidence_dir: Path,
+    *,
+    router: ModelRouter | None = None,
+    ledger: CostLedger | None = None,
+    run_id: str = "grounded_research",
 ) -> GroundedResearchResult:
     """Runs one query directly against the isolated agent (not through a
     consumer's `AgentTool` call — this is the standalone entry point M4's
@@ -111,6 +121,14 @@ async def research_topic(
     `EvidenceArtifact`. Returns zero citations, not a fabricated one, if the
     model didn't ground its answer — that's a real possible outcome, not a
     bug to paper over.
+
+    `router`/`ledger` are optional (M4's own smoke script and the existing
+    tests pass neither): when both are given, the call's real token usage
+    (from ADK's `Event.usage_metadata` — Vertex, unlike the Azure agents,
+    isn't wired through `_llm_call._invoke`'s own ledger recording) is
+    written to the same `llm_calls` table every other agent uses (M13, the
+    dashboard's grounded-research endpoint — CLAUDE.md Amendment 4(a)
+    requires this call's cost stay visible in the ledger like every other).
     """
     session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
     session_id = sha256_text(query)[:16]
@@ -119,6 +137,8 @@ async def research_topic(
 
     narrative = ""
     grounding_metadata = None
+    usage_metadata = None
+    started = time.monotonic()
     try:
         session = await session_service.create_session(
             app_name=_APP_NAME, user_id="specter", session_id=session_id
@@ -128,6 +148,8 @@ async def research_topic(
         ):
             if event.grounding_metadata:
                 grounding_metadata = event.grounding_metadata
+            if event.usage_metadata:
+                usage_metadata = event.usage_metadata
             if event.is_final_response() and event.content and event.content.parts:
                 narrative = "\n".join(
                     p.text for p in event.content.parts if not p.thought and p.text
@@ -136,6 +158,32 @@ async def research_topic(
         # `close()` tears down toolsets/MCP sessions — same pattern as
         # `_llm_call._invoke` (M7 depends on this).
         await runner.close()  # type: ignore[no-untyped-call]
+    latency_ms = (time.monotonic() - started) * 1000
+
+    if router is not None and ledger is not None:
+        tier = router.resolve("grounded_research")
+        prompt_tokens = (usage_metadata.prompt_token_count or 0) if usage_metadata else 0
+        cached_tokens = (usage_metadata.cached_content_token_count or 0) if usage_metadata else 0
+        completion_tokens = (usage_metadata.candidates_token_count or 0) if usage_metadata else 0
+        if usage_metadata is None:
+            logger.warning("grounded_research.no_usage_metadata", query=query)
+        ledger.record(
+            LlmCallRecord(
+                ts=datetime.now(UTC),
+                run_id=run_id,
+                agent="grounded_research",
+                task_class="grounded_research",
+                tier=tier.name,
+                model=tier.model,
+                prompt_tokens=prompt_tokens,
+                cached_tokens=cached_tokens,
+                completion_tokens=completion_tokens,
+                latency_ms=latency_ms,
+                cost_usd=compute_cost(tier, prompt_tokens, cached_tokens, completion_tokens),
+                cache_layer=CacheLayer.NONE,
+                escalated=False,
+            )
+        )
 
     citations: list[EvidenceArtifact] = []
     chunks = grounding_metadata.grounding_chunks if grounding_metadata else None

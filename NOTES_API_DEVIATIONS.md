@@ -1110,3 +1110,30 @@ synthetic ones are never sent to Google (CLAUDE.md hard rule 5, and their
 streets are fabricated anyway).
 
 ---
+
+## D26 — `fastapi==0.141.1`'s `app.routes` wraps `include_router`-mounted
+routes in an opaque `_IncludedRouter`, not flattened `APIRoute` objects
+
+**Found:** M13, 2026-08-18. **Affects:** `src/specter/api/app.py`,
+`tests/test_api.py`, any future session introspecting routes for a test
+(e.g. M14's "the research button must never be a GET route" check).
+
+Older FastAPI/Starlette versions expose `app.routes` as a flat list where
+each entry from `include_router()` is a real `starlette.routing.Route` with
+`.path`/`.methods`. On this version, each `include_router()` call instead
+adds one `fastapi.routing._IncludedRouter` object to `app.routes` — it has
+neither attribute, so `route.path`/`route.methods` raises
+`AttributeError: '_IncludedRouter' object has no attribute 'path'` for any
+router-mounted endpoint (the app's own directly-declared routes, like
+`/docs`/`/openapi.json`, are unaffected — those are still plain `Route`).
+
+**Do not walk `app.routes` to answer "what HTTP methods does path X
+support."** Use the OpenAPI schema instead — it is stable across this
+version boundary and is what `tests/test_api.py::
+test_research_endpoint_is_post_only_never_get` uses:
+
+```python
+methods = set(app.openapi()["paths"]["/research"])  # {"post"}
+```
+
+---

@@ -202,7 +202,7 @@ rule.
 |---|---|---|---|
 | **M11** | Physical Existence signal | `tools/maps_tools.py`, `scripts/60_classify_addresses.py`, `Address.location_type`, new `physical_existence` signal | `DONE` |
 | **M12** | ML models as tools | `tools/ml_tools.py` — scikit-learn anomaly + supervised scorer, deterministic at inference, versioned, honestly evaluated | `DONE` |
-| **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `TODO` |
+| **M13** | Dashboard data API | FastAPI read-only JSON API over the real artifacts (`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, M11/M12 outputs) | `DONE` |
 | **M14** | Dashboard frontend | The judge-facing UI: cohort overview, per-case drill-down, JudgeReport view | `TODO` |
 
 ---
@@ -211,12 +211,29 @@ rule.
 
 *Replace this section each milestone. It describes NOW, not history.*
 
-**Last updated: 2026-08-18, end of M12 — Phase 1 complete, Phase 2 slice
+**Last updated: 2026-08-18, end of M13 — Phase 1 complete, Phase 2 slice
 underway.** M1-M10 `DONE` (Phase 1). **M11 `DONE`** — the Physical Existence
 signal is live, classified against the real Google Maps Platform, and firing
 in real case packets. **M12 `DONE`** — an `IsolationForest` anomaly scorer is
 trained on the full real cohort and callable via `ml_tools.score_provider`.
-M13-M14 are `TODO`; M13's Action Plan is written.
+**M13 `DONE`** — a read-only FastAPI JSON API (`src/specter/api/`) over
+`data/cases/`, `data/ledger.sqlite`, `JudgeReport.md`, Neo4j, and M11/M12's
+outputs, plus the one operator-approved write endpoint, `POST /research`,
+verified live with three real, billed Vertex calls. M14 is `TODO`; its
+Action Plan is written.
+
+**M13 in one line:** `uvicorn specter.api.app:app` serves `/cohort`,
+`/cases/{npi}`, `/ml/{npi}`, `/costs`, `/judge` (all read-only) and
+`POST /research` (the one write path). Every endpoint checkpointed live
+against the real 245-case corpus — see M13's Result in §5 for full output.
+D-23 (`priority_tier` not persisted) is handled by recomputing
+`ScoringService.score` from the persisted `CasePacket` with
+`entity_adjudications=[]`, flagged `priority_tier_approximate: true` in
+every response that carries a tier. D-15/D-25 (`grounded_research` had no
+live consumer) close for real this milestone, not M14 as a stale carried-
+forward note assumed — `agents/grounded_research.research_topic` gained
+optional `router`/`ledger`/`run_id` params so its cost lands in
+`data/ledger.sqlite` like every other agent call.
 
 **M11 in one line:** 244 screened-cohort addresses classified live — 173
 `commercial_medical`, 46 `commercial`, 24 `residential`, 2 `mailbox_store` —
@@ -419,20 +436,20 @@ entries; the legacy Nearby Search endpoint M11 uses is enabled and works.
 | ~~D-9~~ | ~~`get_community_context` never reads persisted characterization~~ | **Cleared M3.** Reads `characterization`/`notable_members`/`risk_themes`/`generated_at`/`prompt_version` off the Community node alongside the always-fresh structural facts. Verified live. | — |
 | D-10 | `EnforcementCase.legal_status` loaded by M2's `graph/enforcement_loader.py` still comes from the **regex keyword heuristic** (`infer_legal_status`) on the graph node itself — **clarified, not fully cleared, M5.** `case_reporter.synthesize` now embeds the agent's real per-match adjudication (`EnforcementFindings.legal_status_per_match`) directly into `CasePacket.legal_status_per_match` — the *case packet*, not the graph node, is the system of record for an investigation's adjudicated legal status. The graph node's own `legal_status` property is left as the loader's coarse heuristic deliberately (a default/fallback for queries that never ran the agent), not an oversight. | Whether the graph node should *also* be updated (vs. staying loader-only) is a separate, lower-stakes question — nothing currently reads the stale node property for a screened provider, since `CasePacket` is what gets reported | not urgent — revisit only if something starts reading `EnforcementCase.legal_status` directly for a screened provider |
 | ~~D-14~~ | ~~Numeric-grounding check duplicated per-agent~~ | **Cleared M5.** `agents/_grounding.py` — `numbers_in`/`numeric_violations`, both pure functions. `graph_investigation._numeric_violations` is now a thin wrapper over it; `case_reporter.synthesize` is the second real consumer. | — |
-| D-15 | `build_grounded_research_tool()`'s `AgentTool(..., propagate_grounding_metadata=True)` wiring exists and is unit-tested offline, but **the propagation path has never actually run live** — M4's own checkpoint calls the search agent directly via its own `Runner`, not through a consumer's tool call, so `tool_context.state['temp:_adk_grounding_metadata']` round-tripping is verified against ADK 2.6.2 source only, not by a real call | M5's `skeptic`/`case_reporter` both run with `tools=[]` — neither consumes `grounded_research`, so M5 did not wire a live consumer either | **M9** (no earlier milestone has a natural consumer left) |
+| ~~D-15~~ | ~~`AgentTool(..., propagate_grounding_metadata=True)` propagation path never run live~~ **CLEARED 2026-08-18 (M13).** `POST /research` (`api/research.py`, wrapping `agents.grounded_research.research_topic`) ran live 3 times this session — real narratives, real grounding citations (27 new `EvidenceArtifact`s, `data/evidence/` 277→304), `citation_disclosure` naming this same D-15 finding in every response. Still not exercised through a *consumer's* `AgentTool` call specifically (`research_topic` calls the agent directly, same pattern M4 established) — if that distinction ever matters, it's a new, narrower debt, not this one. | — | **cleared** |
 | ~~D-16~~ | ~~Plan §9.1's Orchestrator agent not scoped into any milestone~~ | **Resolved M6, deliberately, not deferred.** No LLM Orchestrator agent built. `workflow/state.cohort_select` + `ScoringService` are the deterministic substitute plan §10's own pseudocode already implies (both are explicitly non-agent steps there) — `config/screening.yaml`'s static `cohort`/`escalation_gate` blocks fully determine cohort/depth for Phase 1, so an LLM "planning" call would have no real decision left to make. Revisit only if Phase 2 needs dynamic cohort/depth planning. | — |
 | D-17 | **Synthetic scenario providers (S01–S10) carry zero `HAS_TAXONOMY` edges** — verified live M6 (`MATCH (p:Provider {data_origin:'synthetic'})-[:HAS_TAXONOMY]->() RETURN count(*)` → `0`). `cohort_select`'s taxonomy-prefix filter can therefore never select any of them; the live cohort (6,944 real DME providers) and the synthetic scenarios are two disjoint populations | Found via `workflow/state.build_candidate_pairs`/`cohort_select` while building M6; `ingest/synthetic.py`/`graph/loader.py` are outside M6's file list, not fixed. A cohort-based demo/eval will never see S01–S10 — query by `scenario_id` directly instead (M3/M5's smoke scripts already do) | unscheduled — fix in whichever milestone next touches `ingest/synthetic.py`, or route around it permanently if scenario-id-direct querying is judged sufficient |
 | ~~D-18~~ | ~~`agents/_llm_call._invoke` caches a model response to L1 Redis *before* validating it's well-formed JSON~~ | **CLEARED M10.** It recurred for real on M10's first live cold-run attempt (a genuinely different poisoned key than M6's original finding), which is what finally forced the fix: `_invoke` now runs `_validate_output` before `runtime.cache.set`, gated behind a `validation_error` local so `runtime.ledger.record` still fires unconditionally (preserving real-cost accounting for a failed call — a naive validate-then-return-early rewrite would have silently dropped that telemetry). See `NOTES_API_DEVIATIONS.md` D23. | **cleared** |
 | D-19 | **`polars.read_excel` emits a `FutureWarning` that its return type becomes a `Series` instead of a `DataFrame` in Polars 2.0** — `ingest/state_medicaid._parse_tx` unpacks it as a dict of DataFrames and would break on that upgrade. Introduced 2026-08-17 with the `fastexcel==0.16.0` dependency (TX's source is a legacy `.xls`). The warning is deliberately **not** suppressed: it is the only signal that a polars bump breaks TX ingest, and silencing it would trade a noisy log line for a silent failure. | Trivial to fix when it lands (unpack the Series case), but pointless to pre-empt against an API that hasn't shipped — polars is pinned at `1.43.2` | **whenever polars is bumped to 2.x** — do not bump without re-running `pytest tests/test_ingest_connectors.py` |
-| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. **2026-08-18 update: dead a THIRD time.** Found while running M11's suite — a fresh `httpx` call to `/chat/completions` returns `401 "Access denied due to invalid subscription key or wrong API endpoint"`, and the same 4 embedding-dependent tests M8 first documented are red again. Not caused by M11 (verified by `git stash`). **Three flips now.** Operator rotated it the same day; re-verified live by this session — chat `200`, embeddings OK at 3072 dims via the project's own `embed_texts`, and the suite went from 4-failed back to **284 passed**. **Four state changes total. Treat "the key is alive" as false until you personally re-prove it, every session, no exceptions.** | — | **cleared 2026-08-18 (again) — re-verify before every live run** |
+| D-20 | ~~The Azure OpenAI key in `.env` is dead~~ **CLEARED 2026-08-17, same M9 session; flipped dead a second time and was re-cleared again in M10, same day.** Operator rotated the credentials; re-confirmed live with a fresh `httpx` call (`200`, real completion). `scripts/50_judge.py` then ran for real, multiple times, producing a genuine `JudgeReport.md`. All 268 tests pass, including the 4 that were failing on the live embedding deployment throughout M8 and early M9. **M10 update:** the key died *again* mid-cold-run (231/250 providers in, both chat and embedding endpoints returning `401`) — a second alive→dead→alive→**dead**→alive flip. The operator was asked directly, rotated it again, and the run resumed and completed against the same deterministic 250-NPI cohort. **This key has now flipped twice** — before trusting it in any future session, always re-run the fresh `httpx`/`curl` check yourself; do not trust any prior session's "the key was alive as of \<date\>" note, including this one. **2026-08-18 update: dead a THIRD time.** Found while running M11's suite — a fresh `httpx` call to `/chat/completions` returns `401 "Access denied due to invalid subscription key or wrong API endpoint"`, and the same 4 embedding-dependent tests M8 first documented are red again. Not caused by M11 (verified by `git stash`). **Three flips now.** Operator rotated it the same day; re-verified live by this session — chat `200`, embeddings OK at 3072 dims via the project's own `embed_texts`, and the suite went from 4-failed back to **284 passed**. **Four state changes total. Treat "the key is alive" as false until you personally re-prove it, every session, no exceptions.** **M13 update: dead a FIFTH time**, found by the session-start `httpx` check before any M13 code was written — `401`, same message. Not rotated this time (operator's call: M13 needed no Azure call at all — every endpoint reads Neo4j/SQLite/markdown except `POST /research`, which is Vertex, a separate credential, and stayed live throughout). `pytest tests/ -q` at M13 session start: 291 passed, 4 failed — the same 4 tests every prior flip has named. **Five state changes total now.** | — | **dead as of M13's session start (2026-08-18) — re-verify before any milestone that needs a real Azure call; M13 itself did not** |
 | D-21 | ~~Ground-truth positives for `judge/detection_eval.py` sparser than plan §12.1 assumes~~ **CLEARED 2026-08-17 — design resolved AND empirically run.** Only 4 real (non-synthetic) providers out of 8,445 have a direct `EXCLUDED_BY` edge; `judge/detection_eval.py` reports this denominator plainly and treats per-scenario recall as the headline (plan §12.1's own instruction) via `ScenarioRecallResult.detector_exists`. **Real run, `JudgeReport.md`:** precision@10/25/50 = 0.00 (the only 2 real `CasePacket`s in the corpus have zero fired signals, so `signal_count_proxy` ranking had nothing to favor — a thin-corpus artifact, reported honestly rather than hidden), **8/8 scenarios with a Phase 1 detector detected**. | — | **cleared** |
 | D-22 | ~~Amendment 2 mitigation 5 ("sample index excluded from the cache key") contradicts its own purpose~~ **CLEARED 2026-08-17 — fixed, mechanically verified offline (`tests/test_judge_rubric_judge.py`), AND empirically confirmed live.** `judge/rubric_judge._sample_runtime` gives each of the 3 judge samples its own cache-disabled `AgentRuntime`. An intermediate live run showed genuinely differing per-sample scores (non-integer means like 4.333 from 3 disagreeing real calls) before averaging out closer to consensus on the final run — proof the 3 samples are real independent Azure calls, not L1 replays of one response. | — | **cleared** |
-| D-23 | **`CaseScore` is never written to disk.** `workflow/screening.py:175` persists only the `CasePacket`; the `case_score` dict travels up to `scripts/40_screen.py`, gets printed, and is dropped. Recomputing it from a persisted packet is *almost* possible — `signals`, `enforcement_matches`, `legal_status_per_match` and `counter_evidence.confidence_adjustment` are all in the packet — but **`entity_adjudications` are not persisted anywhere**, and `ScoringService.score` reads them for `identity_integrity` and for the "unresolved entity-match conflict" gate reason (`workflow/state.py:128-131`, `:159-160`). A recomputation would therefore silently assume zero conflicts, i.e. fabricate a number. Found 2026-08-18 while scoping M13. | Fixing it is a ~3-line edit (persist the per-provider summary `screen_provider` already returns, which contains `case_score.model_dump(mode="json")` in full) — but it only produces data on the **next** screening run, so it is M13's call whether to pay for a fresh run or ship a dashboard whose tier chart is recomputed-and-labelled-approximate. Do not silently recompute and present it as exact. | **M13** |
-| D-24 | **No provider in the current 244-case corpus can reach `HIGH_PRIORITY`.** Measured 2026-08-18 over the persisted packets: 48 cases fire 0 signal families, 163 fire 1, 33 fire 2, **0 fire 3** — and `config/screening.yaml`'s `escalation_gate.min_independent_signal_families` is 3 against exactly 3 defined families, so the gate currently requires *all three* to fire. Zero `enforcement_matches` across all 244 as well. The real distribution is 0 HIGH / 196 STANDARD / 48 LOW. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. It is recorded here because two upcoming milestones trip over it: **M11 adds a 4th family**, which changes what "3 of N" means and must be re-measured, not assumed; and **M14 charts the tier distribution**, which will be a bar of height zero unless something changes. Neither milestone may tune `min_independent_signal_families` to manufacture a nicer-looking demo — that is gaming the gate, and it would be a lie of exactly the kind §0.1 rule 5 exists to prevent. | **M11 re-measured it 2026-08-18 and the answer is reassuring:** the new 4th family moved 5 of 25 cases up by one family and **no case reached 3**, so no `HIGH_PRIORITY` was manufactured. Max families fired across the whole 245-case corpus is still 2. `min_independent_signal_families` untouched. **M14 must still chart the zero bar honestly.** |
+| D-23 | **`CaseScore` is still never written to disk** — unchanged from before M13. `workflow/screening.py:175` persists only the `CasePacket`; `case_score` still travels up to `scripts/40_screen.py`, gets printed, and is dropped. **Handled, not fixed, in M13:** `api/cases.py._approximate_score` recomputes `ScoringService.score` from the persisted `CasePacket` with `entity_adjudications=[]` (the one input that's genuinely never persisted), and every response carrying a `priority_tier` sets `priority_tier_approximate: true` plus a note naming exactly what's approximated (`identity_integrity` only — every other dimension is exact). Chose this over a fresh `scripts/40_screen.py` re-run because Azure was dead at M13's session start (D-20, 5th flip) and a real re-run costs real money to get a number nobody was blocked on. | The actual persistence fix (the ~3-line edit to `workflow/screening.py:175-184`) is still not done — it only helps the *next* screening run, and M13 shipped an honest workaround instead of paying for one. | **unscheduled** — fix whenever a milestone next runs a real `scripts/40_screen.py` pass and wants the dashboard's `identity_integrity` to stop being an approximation; not blocking for M14 |
+| D-24 | **No provider in the 245-case corpus can reach `HIGH_PRIORITY`.** Re-measured live 2026-08-18 (M13, via `GET /cohort`): 0 HIGH_PRIORITY / 198 STANDARD / 47 LOW (up from the 244-case corpus's 0/196/48 the ticket originally cited — one more case exists now, tier proportions essentially unchanged). `config/screening.yaml`'s `escalation_gate.min_independent_signal_families: 3` against 4 defined families (M11 added `physical_existence`) still means no case has fired 3+ independent families. | Nothing is broken — the gate is plan §10's, verbatim, and a demanding gate producing few high-priority leads is the correct behaviour for a screening system. | **M14 must chart the real 0/198/47 bar honestly** — `GET /cohort`'s `priority_tier_counts` is the live source of truth; do not hardcode the older 0/196/48 figure into the frontend. |
 | ~~D-26~~ | ~~S01 still undetected after M11~~ **CLEARED 2026-08-18, same session, operator-approved.** S01's five providers moved onto real Miami residential streets (picked empirically — 8 candidates probed, the 5 returning `residential` with 0 establishments within 50m kept). All five now fire `physical_existence` and nothing else; `SCENARIO_EXPECTED_SIGNALS["S01"]` updated; **`JudgeReport.md` headline moved 8/8 → 9/9**. `data_origin` stays `synthetic` on the nodes, `public` on the Maps artifact. Only the `synthetic_providers` snapshot was regenerated (186 rows, unchanged count); every other frozen source was left untouched. **Fixing this surfaced a real pre-existing bug — see D-27.** | — | **cleared** |
 | D-27 | ~~`_signal()` hardcoded `data_origin=PUBLIC`~~ **FOUND AND CLEARED 2026-08-18 (M11).** Every `RiskSignal` fired against a synthetic scenario provider had been mislabelled `public` since M4 — verified live: `phone_degree` on S02 (`9020000000`) returned `data_origin=public` for a provider whose node says `synthetic`. CLAUDE.md hard rule 5 calls unlabelled origin-mixing a hard failure, and this was it, sitting latent in all nine original detectors. It only became material when M11 attached real `public` Maps evidence to a `synthetic` provider's address, which is why it was fixed in-milestone rather than deferred. `signal_tools._provider_origin(driver, npi)` now reads the provider's own `data_origin` (lru-cached, one query per NPI per process) and **raises `SpecterError`** rather than defaulting when it is absent. Two regression tests. | — | **cleared** |
-| D-25 | **`grounded_research` still has no live consumer** — extends D-15. Confirmed 2026-08-18: the only references outside the agent module itself are in `scripts/45_smoke_grounded_research.py`. `data/evidence/` holds 7 artifacts total, so the citation trail the grounding pillar is graded on has almost no accumulated material. | D-15 has been open since M4 because no Phase 1 agent had a natural reason to call it. **The dashboard is the first natural consumer this project has ever had** — a per-case "run grounded research on this provider" endpoint would close D-15 for real. That is a scope decision for M13/M14, not an assumed default; if it is not taken, M14 must not show an empty panel captioned as if data were expected. | **DECIDED 2026-08-18: wire it.** Operator asked for live grounding explicitly. `CLAUDE.md` Amendment 4(a) amended the same day to permit one write path in the dashboard for exactly this. Vertex SA verified live — `scripts/45_smoke_grounded_research.py` returned 12 real citations — so **D-15 closes in M14**, not "unscheduled". |
-| D-28 | **M12's `IsolationForest` anomaly score barely separates the held-out synthetic scenarios from controls** — `auc=0.556` (0.5 = random), `precision@36=0.333` (0.194 = random baseline). Real result, measured on the full 6,970-provider real cohort, not a bug (M12 Result in §5 has the full analysis: the real cohort's features are heavily zero-inflated, and each synthetic scenario trips exactly one detector rather than looking anomalous across the whole vector). | Kept out of `ScoringService`/the escalation gate deliberately, per the M12 Action Plan's own instruction to report an unfavourable number honestly rather than fudge a threshold. Ships as a dashboard-only panel instead. | **M14 must caption this panel with its real weakness** — "structural anomaly score, weak separation on held-out synthetic evaluation (AUC 0.556)" or equivalent, never presented as validated or as a fraud indicator. Improving the model (better features, a supervised pass explicitly labelled as trained-on-synthetic-only, or accepting the score as illustrative-only) is Phase 2 scope, not M13/M14. |
+| ~~D-25~~ | ~~`grounded_research` still has no live consumer~~ **CLEARED 2026-08-18 (M13), same session as D-15.** `POST /research` is the live consumer — 3 real calls, 27 new citations, `data/evidence/` 277→304. The prior note here ("D-15 closes in M14, not M13") was itself stale by the time M13's own Action Plan was written — that Action Plan put `api/research.py` in M13's own file manifest, and M13 built and live-verified it. | — | **cleared** |
+| D-28 | **M12's `IsolationForest` anomaly score barely separates the held-out synthetic scenarios from controls** — `auc=0.556` (0.5 = random), `precision@36=0.333` (0.194 = random baseline). Real result, measured on the full 6,970-provider real cohort, not a bug (M12 Result in §5 has the full analysis: the real cohort's features are heavily zero-inflated, and each synthetic scenario trips exactly one detector rather than looking anomalous across the whole vector). | Kept out of `ScoringService`/the escalation gate deliberately, per the M12 Action Plan's own instruction to report an unfavourable number honestly rather than fudge a threshold. Ships as a dashboard-only panel instead. **M13 carries `known_limitations`/`training_set_description` verbatim into `GET /ml/{npi}` and `GET /cases/{npi}` — confirmed live this session.** | **M14 must caption this panel with its real weakness** — "structural anomaly score, weak separation on held-out synthetic evaluation (AUC 0.556)" or equivalent, never presented as validated or as a fraud indicator. Improving the model (better features, a supervised pass explicitly labelled as trained-on-synthetic-only, or accepting the score as illustrative-only) is Phase 2 scope, not M13/M14. |
 
 ---
 
@@ -3794,20 +3811,191 @@ pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
   option (b) above.
 
 **Definition of done.**
-- [ ] Cohort overview, per-case detail, cost, judge, and ML endpoints all
+- [x] Cohort overview, per-case detail, cost, judge, and ML endpoints all
       return real data with no placeholder values
-- [ ] The one grounded-research write endpoint is user-triggered only, never
+- [x] The one grounded-research write endpoint is user-triggered only, never
       on page load; its cost appears in the ledger like every other call
-- [ ] D-28's `known_limitations`/`training_set_description` survive into the
+- [x] D-28's `known_limitations`/`training_set_description` survive into the
       ML endpoint's JSON verbatim
-- [ ] D-23 handled explicitly (persisted or clearly labelled approximate,
+- [x] D-23 handled explicitly (persisted or clearly labelled approximate,
       your choice, stated in the Result)
-- [ ] D-24's real 0/196/48 tier split returned as-is, not tuned
-- [ ] Missing `data/cases/`/`data/evidence/`/`data/ledger.sqlite`/
-      `data/models/` each fail with a real, specific error naming what's
-      missing and how to regenerate it
-- [ ] `pytest`, `ruff`, `mypy` all clean
-- [ ] §2 → `DONE`; §3 replaced; §4 updated; M14's Action Plan written
+- [x] D-24's real 0/198/47 tier split returned as-is, not tuned (245-case
+      corpus as of this session — see Result; not the Action Plan's 244)
+- [x] Missing `data/cases/`/`data/ledger.sqlite`/`data/models/` each fail
+      with a real, specific error naming what's missing and how to
+      regenerate it (`data/evidence/` is never a read-path dependency — see
+      Result for why)
+- [x] `pytest`, `ruff`, `mypy` all clean
+- [x] §2 → `DONE`; §3 replaced; §4 updated; M14's Action Plan written
+
+**Result (2026-08-18).** `DONE` — full checkpoint passed live, including one
+real, billed grounded-research call (three, actually — see below).
+`pytest tests/ -q` → **305 passed, 4 failed** (291 baseline + 14 new;
+the 4 failures are the same pre-existing Azure-key-dead tests documented
+below, confirmed present *before* any M13 code was touched — not a
+regression). `ruff check src/ tests/ scripts/` and `mypy src/` both clean
+across 72 source files.
+
+**Azure key check, first thing, per §0.3 — dead a FIFTH time.** Fresh
+`httpx` call to `/chat/completions` returned `401 "Access denied due to
+invalid subscription key or wrong API endpoint"` before any code was
+written. `pytest tests/ -q` on the clean checkout: **291 passed, 4 failed**
+(the same 4 embedding/Azure-dependent tests D-20 has documented through
+four prior flips: `test_graph_investigation.py::
+test_build_evidence_carries_fired_signals_and_hybrid_search`,
+`test_graph_retrieval.py::test_global_/test_semantic_/test_hybrid_*`). Per
+the operator's explicit instruction this session ("complete the code
+implementation part first and test everything else... we can pause before
+a critical process if needed"), M13 proceeded without pausing: **M13 makes
+no Azure calls anywhere** — every endpoint here reads Neo4j, SQLite, or a
+markdown file, except `POST /research`, which is Vertex, a separate
+credential, already verified live in M11/M12 and re-verified live again
+this session (see below). The dead Azure key is D-20's now-**five**-times
+debt, recorded, not worked around — it blocks nothing this milestone
+actually needed.
+
+**D-23 — handled via option (b), recompute-and-label-approximate, not a
+fresh screening run.** `api/cases.py`'s `_approximate_score` calls the real
+`workflow.state.ScoringService.score` with `entity_adjudications=[]` — the
+one input never persisted for a completed case. Every other input
+(`signals`, `enforcement_matches`/`legal_status_per_match`, the Skeptic's
+`confidence_adjustment` via `CasePacket.counter_evidence`) is exact, not
+approximated — `identity_integrity` is the only dimension affected, since it
+assumes zero unresolved entity-match conflicts. Every response that includes
+a `priority_tier` carries `priority_tier_approximate: true` and a
+`priority_tier_approximation_note` string naming exactly this. Chose (b)
+over (a) because a fresh 245-provider `scripts/40_screen.py` re-run is a
+real Azure cost line item and the Azure key was dead at session start (see
+above) — recompute-and-label-approximate needed no live LLM call at all and
+is the honest option CLAUDE.md hard rule 7 asks for over a costly re-run
+just to get an exact number nobody was blocked on.
+
+**D-24 re-measured, not the same numbers as the ticket.** The Action Plan
+and D-24 both cite a 244-case corpus at 0/196/48; the real corpus grew to
+**245 cases** since (M11's session added `physical_existence`, 7 cases now
+fire it), and the live `/cohort` call this session returned **0 HIGH_PRIORITY
+/ 198 STANDARD / 47 LOW** — still zero `HIGH_PRIORITY`, same structural
+finding, different exact counts. Returned as measured, not backfit to match
+the older ticket number. `min_independent_signal_families` untouched.
+
+**D-15/D-25 close in M13, not M14 — the ledger's own carried-forward note
+was stale.** D-25 said "D-15 closes in M14, not 'unscheduled'", written
+before the M13 Action Plan itself assigned `api/research.py` to this
+milestone's own file manifest. Per §0.2 ("verify, don't assume... trust
+reality, fix the plan"): the Action Plan is the more specific, more recent
+source, and it puts the write endpoint in M13. Verified live, three real
+calls (FL/TX/CA state-Medicaid research queries, the exact gap this
+project's own state-exclusion connectors care about):
+`data/evidence/` grew from 277 → 304 artifacts (27 new grounding
+citations across 3 calls), and `data/ledger.sqlite` gained 3 real
+`grounded_research` rows — `tier='T_ground' model='gemini-3.7-flash'
+cost_usd=NULL` (D-8, no Foundry/Vertex pricing filled in, correctly null
+not 0) — with real `prompt_tokens`/`completion_tokens` from ADK's
+`Event.usage_metadata`, which **`research_topic` did not previously
+capture at all** (checked: no ledger call existed anywhere in
+`agents/grounded_research.py` before this session). Extending
+`research_topic` with optional `router`/`ledger`/`run_id` params (backward
+compatible — every existing caller, including M4's own smoke script and
+`tests/test_grounded_research.py`, passes neither and is unaffected) was
+the smallest change that let the one function every consumer wraps satisfy
+Amendment 4(a)'s "cost visible in the ledger" condition, rather than
+duplicating the runner-event loop inside the API endpoint itself.
+
+**The `/judge` endpoint deliberately does not re-derive from
+`judge/detection_eval.py` at request time, despite the Action Plan's stated
+preference.** Traced why: `scripts/50_judge.py`'s scenario corpus
+(`_build_scenario_case`) runs the live M5 agent chain per scenario, and the
+rubric judge itself (`judge/rubric_judge.judge_case`) is 3 more real Azure
+calls per case at T2 pricing — **neither the `JudgeVerdict` objects nor the
+scenario `CasePacket`s are persisted anywhere on disk**, only the rendered
+`JudgeReport.md`. Re-deriving the report fresh per HTTP GET would therefore
+mean real, billed Azure calls on every request — violates both this
+milestone's own "no new data generated" scope and plain cost sense.
+`api/judge.py` instead parses the real, already-generated `JudgeReport.md`
+by its own `## ` section headers (a structural split, not a fine-grained
+number regex, so a future prose change to `judge/report.py` can't silently
+desync a hand-maintained parser) and returns it as JSON, verbatim,
+including the `JUDGE INDEPENDENCE: LIMITED` block. This is a deliberate
+deviation from the Action Plan's literal wording, recorded here per §0.2.
+
+**Checkpoint, verbatim (abbreviated where noted):**
+```
+$ uv run uvicorn specter.api.app:app --port 8000 &
+
+$ curl -s localhost:8000/cohort | python -m json.tool
+{
+  "total_cases": 245, "cases_with_fired_signals": 198,
+  "signal_type_counts": {"physical_existence": 7, "exclusion_proximity": 122,
+    "officer_degree": 103, "geographic_spread": 73, "phone_degree": 9,
+    "address_degree": 3, "enumeration_burst": 1},
+  "priority_tier_counts": {"high_priority": 0, "standard": 198, "low": 47},
+  "priority_tier_approximate": true,
+  "graph_counts": {"provider": 8631, "address": 7848, "community": 255,
+    "exclusion": 119282}
+}
+
+$ curl -s localhost:8000/cases/1003050550 | python -m json.tool
+# provider_npi=1003050550, priority_tier_approximate=true, case_score.priority_tier=standard,
+# anomaly_score=0.3932615108430561, known_limitations=[synthetic_dominated_training_evaluation,
+# not_a_fraud_probability, unsupervised_no_validated_threshold] — all D-28 disclosure present verbatim
+
+$ curl -s localhost:8000/costs | python -m json.tool
+# overall_cache_hit_rate=0.8336, total_calls=48666(+3 after live research calls),
+# every row's cost_usd is JSON null; zero rows with cost_usd==0
+
+$ curl -s localhost:8000/judge | python -m json.tool
+JUDGE INDEPENDENCE: LIMITED.
+The rubric judge (gpt-5.4) shares a model family with the agents it grades, ...
+Judge accuracy on injected-defect calibration cases: 7/8.
+Cross-family validation (Kimi K2.6 or Claude) deferred to Phase 2.
+# sections: [Deterministic checks (PRIMARY), Detection evaluation, Per-scenario recall,
+#   Calibration accuracy (...), Rubric judge scores (SECONDARY),
+#   Deterministic-vs-LLM disagreement, Three worst-scoring cases]
+
+$ curl -s localhost:8000/cases/0000000000 -w "\nHTTP %{http_code}\n"
+{"detail":"no persisted case for provider 0000000000"}
+HTTP 404
+
+$ curl -s localhost:8000/ml/0000000000 -w "\nHTTP %{http_code}\n"
+{"detail":"provider 0000000000 has no data_origin — refusing to emit an AnomalyScore
+with an unlabelled origin (CLAUDE.md hard rule 5)"}
+HTTP 500
+
+$ curl -s -X POST localhost:8000/research -H "Content-Type: application/json" \
+  -d '{"query": "California DHCS Medi-Cal Suspended and Ineligible Provider List"}'
+# → real narrative, 6 real citations, citation_disclosure names D-15 verbatim
+# (3 live research calls total this session — see D-15/D-25 note above)
+
+$ pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+305 passed, 4 failed (pre-existing Azure-key-dead, unrelated to M13), 29 warnings
+ruff: All checks passed! · mypy: Success: no issues found in 72 source files
+```
+
+**Deviations from the Action Plan, all deliberate, all recorded above:**
+- D-23 → option (b) (recompute-approximate), not option (a) (persist +
+  fresh run) — Azure was dead at session start, and (b) needed zero LLM
+  calls to ship an honest number.
+- `api/judge.py` parses the persisted `JudgeReport.md` by section rather
+  than re-deriving typed objects from `judge/detection_eval.py` — the
+  scenario corpus and `JudgeVerdict`s that would require are LLM-generated
+  and never persisted; re-deriving them per request means real Azure/cost
+  on every GET.
+- `agents/grounded_research.research_topic` gained optional
+  `router`/`ledger`/`run_id` params (not in the original file manifest,
+  which only listed `api/*.py`) — the smallest change that let the one
+  function `api/research.py` wraps satisfy Amendment 4(a)'s ledger-
+  visibility condition without duplicating the ADK runner-event loop
+  inside the API layer. Backward compatible; existing callers unaffected.
+- `/ml/{npi}` is a standalone endpoint (Definition of done's "ML endpoint"
+  wording implied one) in addition to being embedded inside
+  `/cases/{npi}`'s response — both use the same `api/ml.score_or_error`.
+- `data/evidence/` was not given its own missing-directory check: no GET
+  endpoint reads from it (`ml_tools.score_provider`'s `evidence_dir` param
+  is accepted but unused in the current M12 implementation — verified by
+  reading the function body), and the one write endpoint,
+  `POST /research`, creates it via `store_artifact`'s own
+  `mkdir(parents=True, exist_ok=True)` rather than requiring it pre-exist,
+  which is correct for the one path in this API that's allowed to write.
 
 ---
 
@@ -3822,33 +4010,51 @@ creep here harder than anywhere else in this plan.
 
 Four views, all backed by real artifacts:
 
-- **Cohort overview** — the real tier distribution (0 HIGH / 196 STANDARD /
-  48 LOW, debt D-24 — chart it honestly, including the zero bar, and say in
-  the UI *why* the gate is demanding), signal-family and signal-type
-  distribution across the 244 cases, cold-vs-warm cache hit rate (72% → 95%,
-  M10's real numbers) and the per-agent ledger table with `cost_usd` shown as
-  `-` (D-8), never `$0.00`.
-- **Per-case drill-down** — the signals table with `value` against
-  `threshold` (the numbers are already in every packet), the narrative, the
+- **Cohort overview** — the real tier distribution (**0 HIGH / 198 STANDARD
+  / 47 LOW as of M13's live `GET /cohort` this session — debt D-24,
+  re-measured; the older 0/196/48 was the 244-case corpus, one case ago.
+  Always render whatever `GET /cohort` returns live, never a hardcoded
+  figure** — chart it honestly, including the zero bar, and say in the UI
+  *why* the gate is demanding, per `priority_tier_approximate`'s note about
+  D-23), signal-family and signal-type distribution across the corpus
+  (`signal_type_counts` — M13 measured `physical_existence: 7,
+  exclusion_proximity: 122, officer_degree: 103, geographic_spread: 73,
+  phone_degree: 9, address_degree: 3, enumeration_burst: 1`), cold-vs-warm
+  cache hit rate (72% → 95%, M10's real numbers, still the ledger's history)
+  and the per-agent ledger table (`GET /costs`) with `cost_usd` shown as `-`
+  whenever it's JSON `null` (D-8), never `$0.00`.
+- **Per-case drill-down** — `GET /cases/{npi}`: the signals table with
+  `value` against `threshold` (already in every packet), the narrative, the
   Skeptic's `counter_evidence.per_signal` rebuttals side-by-side with the
   signals they rebut, the `citation_report`, M11's `location_type` with its
-  Maps evidence artifact, and M12's ML score with its training-set
-  disclosure attached — not as a bare number.
-- **Live grounded research** (added 2026-08-18, operator's decision; closes
-  debt **D-15**) — a user-triggered button that makes a real Vertex Gemini
-  call for the provider on screen and renders the citations it returns. This
-  is the graded source-grounding pillar finally visible in the UI, and it is
-  the most demo-worthy thing in the whole dashboard: an agent going out to the
-  live web, in front of the judges, and coming back with cited findings.
-  Conditions from `CLAUDE.md` Amendment 4(a): user-triggered only — never on
-  page load, never polled — cost visible in the ledger, and the UI must
-  disclose that grounding URIs are Google redirect links rather than
-  publisher URLs (**D15**). Verified live 2026-08-18: 12 real citations.
-- **JudgeReport view** — the verbatim `JUDGE INDEPENDENCE: LIMITED` block
-  first (`CLAUDE.md` Amendment 2 requires it verbatim wherever the judge's
-  numbers appear), then calibration accuracy 8/8, per-scenario recall 8/8,
-  `precision@k` 0.00 with its thin-denominator explanation, and the
-  deterministic-vs-LLM disagreement.
+  Maps evidence artifact, and M12's ML score (`anomaly_score` block) with its
+  `known_limitations`/`training_set_description` attached verbatim — not as
+  a bare number (D-28). Also show `priority_tier_approximate` and its note
+  (D-23) next to the tier badge — the UI must not present a recomputed
+  number as if it were the exact one the live screening run computed.
+- **Live grounded research** (`POST /research`; closed debt **D-15/D-25** in
+  **M13**, not M14 as an earlier draft of this scope assumed) — a
+  user-triggered button that calls M13's endpoint for the provider on screen
+  and renders the citations it returns. This is the graded source-grounding
+  pillar finally visible in the UI, and it is the most demo-worthy thing in
+  the whole dashboard: an agent going out to the live web, in front of the
+  judges, and coming back with cited findings. Conditions from `CLAUDE.md`
+  Amendment 4(a), already enforced server-side by M13, restated for the UI:
+  user-triggered only — never on page load, never polled — and the UI must
+  render `citation_disclosure` verbatim (grounding URIs are Google redirect
+  links, not publisher URLs — D15). Verified live 2026-08-18 (M13): 3 real
+  calls, 27 citations total.
+- **JudgeReport view** — `GET /judge`: the verbatim `limitation_block`
+  first (`CLAUDE.md` Amendment 2 requires the `JUDGE INDEPENDENCE: LIMITED`
+  text verbatim wherever the judge's numbers appear — the real persisted
+  report currently says **7/8**, not 8/8; render whatever the endpoint
+  returns, don't hardcode either number), then the `sections` dict in the
+  same order `judge/report.py` renders them: deterministic checks (PRIMARY)
+  first, then detection evaluation, per-scenario recall, calibration
+  accuracy, rubric scores (SECONDARY), disagreement, worst cases. Each
+  section's value is already-rendered markdown (tables included) — rendering
+  markdown-to-HTML for these blocks is the one templating decision this view
+  needs to make.
 
 The hard rules do not relax for a UI. Numbers rendered must come from the API,
 which gets them from tools — never computed in a template, never rounded into
@@ -3861,4 +4067,145 @@ evidence artifact that produced it.
 
 #### Action Plan
 
-(not yet written)
+**Goal.** A minimal server-rendered HTML UI, mounted in the *same* FastAPI
+app M13 built (`specter.api.app`), over the four views the Scope section
+above names. Nothing here computes anything new — every number, table, and
+caption is either M13's JSON response rendered as HTML, or a static caption
+string. This is the last milestone in the M11-M14 slice.
+
+**Inherited context.**
+
+1. **M13 is `DONE`.** `src/specter/api/{app,cases,costs,judge,ml,research}.py`
+   exist and are live-verified. Read `api/cases.py` and `api/judge.py` in
+   full before writing a single template — their return values (plain
+   `dict[str, Any]`, not Pydantic response models) are exactly what each
+   template will iterate over.
+2. **Call the router functions directly, don't round-trip HTTP to
+   yourself.** `cases.cohort_overview(request)`, `cases.case_detail(npi,
+   request)`, `judge.judge_report()`, `costs.costs()` are plain Python
+   functions (FastAPI just happens to also expose them as routes) that take
+   the same `Request` your new template route already has. Import and call
+   them; do not `httpx.get("http://localhost:8000/cohort")` from inside the
+   same process.
+3. **The real numbers as of M13's session (2026-08-18), so you can sanity-
+   check your own rendering against something concrete — but always render
+   whatever the live call returns, never hardcode these:**
+   `GET /cohort` → `total_cases=245`, `priority_tier_counts={"high_priority":
+   0, "standard": 198, "low": 47}`, `signal_type_counts` has 7 keys
+   (`physical_existence` through `enumeration_burst`), `graph_counts=
+   {"provider": 8631, "address": 7848, "community": 255, "exclusion":
+   119282}`. `GET /judge`'s `limitation_block` currently says **7/8**
+   calibration accuracy, not 8/8 — the two differ across live judge runs
+   (non-zero temperature), which is exactly why the UI must render the live
+   string, never a remembered one.
+4. **D-23**: every `/cohort` and `/cases/{npi}` response carries
+   `priority_tier_approximate: true` and a `priority_tier_approximation_note`
+   string. Render the note near the tier badge, don't drop it.
+5. **D-28**: `/cases/{npi}`'s `anomaly_score` block and the standalone
+   `/ml/{npi}` both carry `known_limitations` (a list of 3 strings) and
+   `training_set_description` (a full sentence). Render both verbatim, not
+   summarized — do not write your own one-line gloss instead of showing the
+   real disclosure text.
+6. **`POST /research` already exists and already enforces every Amendment
+   4(a) condition server-side** (user-triggered, ledger-visible, D-15
+   disclosure in the response). The UI's job is just to trigger it from a
+   button — a plain `<form>`/`fetch()` POST — and render
+   `citation_disclosure` verbatim next to the citations. Do not re-implement
+   any of Amendment 4(a)'s conditions client-side; they're already real,
+   server-enforced constraints one layer down.
+7. **No `markdown` package is installed** (`python -c "import markdown"`
+   fails). `GET /judge`'s `sections` values are pre-rendered GFM markdown
+   (tables included) from `judge/report.py`. Recommended default (ladder
+   rung 1 — does a markdown-to-HTML pipeline need to exist for a demo
+   panel?): render each section verbatim inside a `<pre>` block — zero new
+   dependency, zero new code, and a GFM pipe table is still legible as
+   monospace text. Only reach for `uv add markdown` if the judges'-demo bar
+   genuinely needs real `<table>` rendering; if you do, record it as a
+   deliberate new dependency the way `scikit-learn`/`fastexcel` were.
+8. **`jinja2==3.1.6` is already installed** transitively (verified M13). No
+   new dependency needed for templates. A CDN chart library (e.g. Chart.js
+   via `<script src="https://cdn.jsdelivr.net/...">`) is fine for the tier/
+   signal-histogram bars — this is a real locally-run app, not a sandboxed
+   Artifact, so an external CDN script tag is not a CSP violation here. No
+   separate JS build toolchain regardless (Amendment 4(a)).
+9. **Banned vocabulary** — `core/banned_vocabulary.find_banned_phrases(text)
+   -> list[str]` (`tests/test_banned_vocabulary.py` is the existing test
+   pattern). Every *static* caption string M14 writes (headings, tooltips,
+   the D-24/D-28 explanatory text) must pass `find_banned_phrases(text) ==
+   []` — write a test that runs it over every hardcoded template string, not
+   just the live-data fields (those already passed the check at generation
+   time inside `case_reporter.synthesize`).
+
+**File manifest.**
+| Path | Action | Notes |
+|---|---|---|
+| `src/specter/api/web.py` | CREATE | ~90 lines. `APIRouter` + one shared `Jinja2Templates` instance; 4 page routes (`/`, `/cases/{npi}`, `/judge`, plus whatever path the research button posts through — reuse `/research`, don't add a second one). |
+| `src/specter/api/templates/base.html` | CREATE | Shared layout: inline `<style>` (no external CSS dependency), optional Chart.js CDN `<script>` tag, nav linking the 3 pages. |
+| `src/specter/api/templates/cohort.html` | CREATE | Extends `base.html`. Tier bar chart (or a plain HTML bar/table if you skip the chart lib), signal-type table, per-agent cost table, graph counts. |
+| `src/specter/api/templates/case_detail.html` | CREATE | Extends `base.html`. Signals table, narrative, counter-evidence, citation report, ML panel with D-28 disclosure, research-trigger button + citation render area. |
+| `src/specter/api/templates/judge.html` | CREATE | Extends `base.html`. `limitation_block` verbatim first, then each `sections` entry in `judge/report.py`'s own order. |
+| `src/specter/api/app.py` | EDIT | Mount `web.router` alongside the existing 5 API routers. |
+| `tests/test_api_web.py` | CREATE | Offline `TestClient` tests: each page 200s, key real-data strings present, `priority_tier_approximate`/D-28 disclosure text present in the case-detail HTML, every hardcoded template string passes `find_banned_phrases`. |
+
+**Read before writing.**
+1. `src/specter/api/cases.py`, `src/specter/api/judge.py`, `src/specter/api/
+   costs.py`, `src/specter/api/ml.py` (whole files, all short) — the exact
+   dict shapes every template renders.
+2. `src/specter/api/app.py` — how the other 5 routers mount; `web.router`
+   follows the identical pattern.
+3. `src/specter/core/banned_vocabulary.py` — the function signature to reuse
+   for the static-string test.
+4. `src/specter/judge/report.py:143-188` (`render_report`) — the exact
+   section order and titles `GET /judge`'s `sections` dict keys will have.
+5. `tests/test_api.py` (M13, whole file) — the `TestClient`/monkeypatch
+   pattern this milestone's own tests should follow (Group A offline vs.
+   Group B live-Neo4j-optional-skip).
+
+**Steps.** *(left to the implementing session — the facts above are the
+expensive part; the Jinja2/FastAPI wiring itself is routine.)*
+
+**Checkpoint.**
+```bash
+uv run uvicorn specter.api.app:app --port 8000 &
+curl -s localhost:8000/ | grep -o 'STANDARD' # tier label present in rendered HTML
+curl -s localhost:8000/cases/1003050550 | grep -o 'not_a_fraud_probability' # D-28 disclosure rendered
+curl -s localhost:8000/judge | grep -o 'JUDGE INDEPENDENCE: LIMITED'
+pytest tests/ -q && ruff check src/ tests/ scripts/ && mypy src/
+```
+Then, per this project's standing UI rule (not just this Action Plan):
+**open it in a real browser** (`mcp__claude-in-chrome__*` tools, or ask the
+operator) and click through all 4 views, including one real click of the
+research-trigger button, before calling this milestone done — a passing
+`curl`/`pytest` run is not the same as confirming the page actually renders.
+
+**Traps.**
+- Don't recompute `priority_tier` or the tier counts in a template — they
+  already come pre-computed (and pre-labelled `priority_tier_approximate`)
+  from `api/cases.py`.
+- Don't let the research button auto-fire on page load, on a poll, or on
+  page revisit — Amendment 4(a) is explicit and it's already load-bearing
+  server-side; don't undermine it with a client-side auto-POST.
+- `cost_usd` is JSON `null` for essentially every row (D-8) — a naive
+  Jinja2 `{{ row.cost_usd }}` renders the string `"None"` in a template,
+  not a blank or a `-`. Use `{{ row.cost_usd if row.cost_usd is not none
+  else "-" }}` or equivalent, and test it.
+- The `/judge` `limitation_block` and every `sections` value already contain
+  literal `\n` — rendering them inside `<pre>` (not `<p>`) is what keeps the
+  original line breaks and the GFM table's pipe alignment legible.
+
+**Definition of done.**
+- [ ] All 4 views render real M13 data end to end, verified via `curl` AND
+      a real browser click-through
+- [ ] D-23's `priority_tier_approximate` note visible next to every tier
+      badge
+- [ ] D-28's `known_limitations`/`training_set_description` rendered
+      verbatim on the ML panel, never summarized into a bare number
+- [ ] Research button is user-triggered only (never on load/poll); its
+      response renders `citation_disclosure` verbatim
+- [ ] D-24's real (live, not hardcoded) tier distribution charted honestly,
+      zero bar included
+- [ ] Every hardcoded template string passes `find_banned_phrases`
+- [ ] `pytest`, `ruff`, `mypy` all clean
+- [ ] §2 → `DONE`; §3 replaced; §4 updated. M11-M14 slice complete — say so
+      plainly, and note anything in Amendment 4 that was scoped out and
+      should be a named Phase 2 candidate rather than silently dropped.
