@@ -13,6 +13,7 @@ content coverage is Group B, same reasoning as M13.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -251,7 +252,11 @@ def test_cohort_page_real_corpus_renders_all_cases_linked(driver: Driver) -> Non
     with TestClient(app) as client:
         resp = client.get("/ui")
     assert resp.status_code == 200
-    n_links = resp.text.count('href="/ui/cases/')
+    # Strip <script> blocks first — the live-screening trigger's own JS
+    # builds an `href="/ui/cases/..."` string client-side, which is inert
+    # source text, not a rendered link, and would otherwise inflate the count.
+    body_without_scripts = re.sub(r"<script\b.*?</script>", "", resp.text, flags=re.S)
+    n_links = body_without_scripts.count('href="/ui/cases/')
     packets = [p for p in CASES_DIR.glob("*.json") if not p.name.endswith(".score.json")]
     assert n_links == len(packets)
 

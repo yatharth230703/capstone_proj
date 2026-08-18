@@ -21,16 +21,34 @@ only, never on page load or a timer.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
-from specter.api import cases, costs, judge
+from specter.api import cases, costs, graph, judge
 
 router = APIRouter()
 _templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+
+
+def _tojson(value: Any) -> Markup:
+    """`Jinja2Templates` doesn't register Flask's `tojson` filter — needed
+    to hand real cohort/cost numbers to Chart.js/vis-network as inline JSON
+    without a second HTTP round-trip. Escapes `<`/`>`/`&` so a `</script>`
+    can never appear inside the embedded JSON, and returns `Markup` so
+    autoescape doesn't re-escape already-safe JSON as if it were HTML.
+    """
+    return Markup(
+        json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+
+
+_templates.env.filters["tojson"] = _tojson
 
 
 @router.get("/")
@@ -42,24 +60,18 @@ def root() -> RedirectResponse:
 def cohort_page(request: Request) -> HTMLResponse:
     cohort = cases.cohort_overview(request)
     cost_data = costs.costs()
-    tier_values = cohort["priority_tier_counts"].values()
-    signal_values = cohort["signal_type_counts"].values()
     return _templates.TemplateResponse(
-        request,
-        "cohort.html",
-        {
-            "cohort": cohort,
-            "costs": cost_data,
-            "max_tier_count": max(tier_values) if tier_values else 0,
-            "max_signal_count": max(signal_values) if signal_values else 0,
-        },
+        request, "cohort.html", {"cohort": cohort, "costs": cost_data}
     )
 
 
 @router.get("/ui/cases/{npi}")
 def case_page(npi: str, request: Request) -> HTMLResponse:
     detail = cases.case_detail(npi, request)
-    return _templates.TemplateResponse(request, "case_detail.html", {"detail": detail})
+    neighborhood = graph.get_graph(npi, request)
+    return _templates.TemplateResponse(
+        request, "case_detail.html", {"detail": detail, "neighborhood": neighborhood}
+    )
 
 
 @router.get("/ui/judge")

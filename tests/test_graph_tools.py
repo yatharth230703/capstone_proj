@@ -54,6 +54,32 @@ def test_find_shared_attribute_peers_phone(driver: Driver) -> None:
     assert all(p.attribute == "phone" for p in peers)
 
 
+def test_expand_neighborhood_returns_real_edges_not_the_old_always_empty_list(
+    driver: Driver,
+) -> None:
+    """`edges` silently always returned `[]` before this session — see
+    `graph_tools.expand_neighborhood`'s own docstring. S02's 5 providers
+    share one Phone node, so hop=1 must show a real `HAS_PHONE` edge from
+    the center to it.
+    """
+    sub = gt.expand_neighborhood(driver, "9020000000", hops=1, limit=50)
+    assert sub.edges
+    phone_edges = [e for e in sub.edges if e["rel_type"] == "HAS_PHONE"]
+    assert len(phone_edges) == 1
+    assert phone_edges[0]["source"] == "graph:provider:9020000000"
+    assert phone_edges[0]["target"].startswith("graph:phone:")
+
+
+def test_expand_neighborhood_edge_endpoints_are_always_in_the_returned_node_set(
+    driver: Driver,
+) -> None:
+    sub = gt.expand_neighborhood(driver, "9020000000", hops=2, limit=50)
+    refs = {"graph:provider:9020000000"} | {n["ref"] for n in sub.nodes}
+    for edge in sub.edges:
+        assert edge["source"] in refs
+        assert edge["target"] in refs
+
+
 def test_shortest_path_to_exclusion_finds_s05(driver: Driver) -> None:
     result = gt.shortest_path_to_exclusion(driver, "9050000000")
     assert result is not None

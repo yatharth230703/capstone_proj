@@ -73,6 +73,91 @@ logger = structlog.get_logger(__name__)
 _STATUS_HALTED = "data_quality_hold"
 
 
+async def screen_one_provider(
+    npi: str,
+    *,
+    driver: Driver,
+    runtime: AgentRuntime,
+    thresholds: ScreeningThresholds,
+    scoring_service: ScoringService,
+    evidence_dir: Path,
+    cases_dir: Path,
+) -> dict[str, Any]:
+    """The real per-provider pipeline — entity resolution, graph
+    investigation, enforcement intel, the Skeptic, deterministic scoring,
+    and the Case Reporter — run sequentially, one Azure call in flight at a
+    time (see this module's docstring on why sequential-per-provider, not
+    three fan-out nodes). Extracted out of `build_screening_workflow`'s
+    `screen_provider` node so `api/screen.py`'s live-screening-from-the-
+    dashboard endpoint (CLAUDE.md Amendment 4(a), second exception) calls
+    the *exact* same pipeline `scripts/40_screen.py` does — not a
+    reimplementation that could silently drift from it.
+
+    Only `SpecterError` (a genuine content-quality rejection for this one
+    provider — CLAUDE.md hard rule 1/6/9 catches) is caught and turned into
+    a `status="rejected"` result; anything else propagates, per hard rule 7.
+    """
+    try:
+        pairs = build_candidate_pairs(driver, [npi])
+        entity_adjudications: list[dict[str, Any]] = []
+        for _, candidate_npi in pairs:
+            result = await adjudicate(driver, npi, candidate_npi, thresholds, evidence_dir, runtime)
+            entity_adjudications.append(result.output)
+
+        graph_result = await investigate(driver, npi, thresholds, evidence_dir, runtime)
+        enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
+
+        counter_result = await challenge(
+            npi, graph_result.output, enforcement_result.output, runtime
+        )
+
+        case_score = scoring_service.score(
+            npi,
+            graph_result.output["signals"],
+            enforcement_result.output,
+            entity_adjudications,
+            counter_result.output["confidence_adjustment"],
+        )
+
+        case_packet = await synthesize(
+            npi,
+            graph_result.output,
+            enforcement_result.output,
+            counter_result.output,
+            driver,
+            evidence_dir,
+            runtime,
+        )
+        # D-10 (BUILD_MILESTONES.md): the graph node, not just the case
+        # packet, should carry the agent's real adjudicated legal_status
+        # once one exists — see graph/enforcement_loader.py's docstring.
+        update_legal_status_from_adjudications(driver, case_packet.legal_status_per_match)
+    except SpecterError as exc:
+        # Visible, not silent: logged loudly and present in the caller's own
+        # summary output, labelled `rejected` — see this module's docstring.
+        logger.warning("screening.provider_rejected", npi=npi, reason=str(exc))
+        return {"npi": npi, "status": "rejected", "rejection_reason": str(exc)}
+
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    (cases_dir / f"{npi}.json").write_text(case_packet.model_dump_json(indent=2))
+    # D-23 (BUILD_MILESTONES.md): CaseScore was computed and returned up to
+    # the caller but never persisted, so the M13 dashboard API could only
+    # ever approximate priority_tier from the CasePacket alone
+    # (entity_adjudications isn't stored anywhere else). Persisting it
+    # alongside the packet is what lets a later API read the exact score
+    # this run actually computed.
+    (cases_dir / f"{npi}.score.json").write_text(case_score.model_dump_json(indent=2))
+
+    return {
+        "npi": npi,
+        "status": "screened",
+        "priority_tier": case_score.priority_tier.value,
+        "case_score": case_score.model_dump(mode="json"),
+        "candidate_pair_count": len(pairs),
+        "citation_report_all_resolved": case_packet.citation_report.all_resolved,
+    }
+
+
 def build_screening_workflow(
     *,
     driver: Driver,
@@ -130,70 +215,15 @@ def build_screening_workflow(
 
     @node(parallel_worker=True, max_parallel_workers=max_parallel_providers)
     async def screen_provider(ctx: Context, node_input: str) -> dict[str, Any]:
-        npi = node_input
-        try:
-            pairs = build_candidate_pairs(driver, [npi])
-            entity_adjudications: list[dict[str, Any]] = []
-            for _, candidate_npi in pairs:
-                result = await adjudicate(
-                    driver, npi, candidate_npi, thresholds, evidence_dir, runtime
-                )
-                entity_adjudications.append(result.output)
-
-            graph_result = await investigate(driver, npi, thresholds, evidence_dir, runtime)
-            enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
-
-            counter_result = await challenge(
-                npi, graph_result.output, enforcement_result.output, runtime
-            )
-
-            case_score = scoring_service.score(
-                npi,
-                graph_result.output["signals"],
-                enforcement_result.output,
-                entity_adjudications,
-                counter_result.output["confidence_adjustment"],
-            )
-
-            case_packet = await synthesize(
-                npi,
-                graph_result.output,
-                enforcement_result.output,
-                counter_result.output,
-                driver,
-                evidence_dir,
-                runtime,
-            )
-            # D-10 (BUILD_MILESTONES.md): the graph node, not just the case
-            # packet, should carry the agent's real adjudicated legal_status
-            # once one exists — see graph/enforcement_loader.py's docstring.
-            update_legal_status_from_adjudications(driver, case_packet.legal_status_per_match)
-        except SpecterError as exc:
-            # Visible, not silent: logged loudly and present in the run's own
-            # summary output, labelled `rejected` — see this module's
-            # docstring. Only `SpecterError` (a *content*-quality rejection
-            # for this one provider) is caught; any other exception still
-            # propagates and halts the whole run, per CLAUDE.md hard rule 7.
-            logger.warning("screening.provider_rejected", npi=npi, reason=str(exc))
-            return {"npi": npi, "status": "rejected", "rejection_reason": str(exc)}
-
-        (cases_dir / f"{npi}.json").write_text(case_packet.model_dump_json(indent=2))
-        # D-23 (BUILD_MILESTONES.md): CaseScore was computed and returned up
-        # to the caller but never persisted, so the M13 dashboard API could
-        # only ever approximate priority_tier from the CasePacket alone
-        # (entity_adjudications isn't stored anywhere else). Persisting it
-        # alongside the packet is what lets a later API read the exact score
-        # this run actually computed.
-        (cases_dir / f"{npi}.score.json").write_text(case_score.model_dump_json(indent=2))
-
-        return {
-            "npi": npi,
-            "status": "screened",
-            "priority_tier": case_score.priority_tier.value,
-            "case_score": case_score.model_dump(mode="json"),
-            "candidate_pair_count": len(pairs),
-            "citation_report_all_resolved": case_packet.citation_report.all_resolved,
-        }
+        return await screen_one_provider(
+            node_input,
+            driver=driver,
+            runtime=runtime,
+            thresholds=thresholds,
+            scoring_service=scoring_service,
+            evidence_dir=evidence_dir,
+            cases_dir=cases_dir,
+        )
 
     return Workflow(
         name="specter_screening",

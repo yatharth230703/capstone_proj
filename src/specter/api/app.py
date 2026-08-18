@@ -53,7 +53,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    from specter.api import cases, costs, judge, ml, research, web
+    from specter.api import cases, costs, graph, judge, ml, research, screen, web
 
     app = FastAPI(title="Specter Dashboard Data API", lifespan=_lifespan)
 
@@ -67,9 +67,13 @@ def create_app() -> FastAPI:
 
     app.include_router(cases.router)
     app.include_router(costs.router)
+    app.include_router(graph.router)
     app.include_router(judge.router)
     app.include_router(ml.router)
     app.include_router(research.router)
+    # Amendment 4(a)'s second write path (2026-08-19, operator-requested):
+    # user-triggered live single-provider screening, POST only.
+    app.include_router(screen.router)
     # M14: the judge-facing HTML UI, mounted under /ui so it never collides
     # with the JSON routes above (GET /cohort, /cases/{npi}, /judge, /ml/{npi}
     # all stay JSON; /ui/... renders the same data as server-rendered HTML).

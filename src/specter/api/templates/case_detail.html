@@ -7,6 +7,16 @@
 </h1>
 <p class="note">{{ detail.priority_tier_approximation_note }}</p>
 
+<h2>Structural neighborhood</h2>
+<p class="note">Real Neo4j nodes and edges within 2 hops of this provider — shared
+addresses, officers, phones, and exclusion proximity, the same graph the signal
+detectors read. Drag nodes to rearrange; hover an edge for its relationship type.</p>
+{% if neighborhood.found and neighborhood.nodes|length > 1 %}
+<div class="panel"><div id="network" style="height: 420px;"></div></div>
+{% else %}
+<p class="note">No neighborhood data (provider has no graph connections beyond itself).</p>
+{% endif %}
+
 <h2>Narrative</h2>
 <pre>{{ detail.case.narrative }}</pre>
 
@@ -85,6 +95,47 @@ ledger like every other call.</p>
 </div>
 
 <script>
+const neighborhood = {{ neighborhood | tojson }};
+
+function labelFor(n) {
+  switch (n.item_type) {
+    case "Provider": return (n.organization_name || n.npi || "Provider").slice(0, 28);
+    case "Address": return [n.street_number, n.street_name, n.street_type].filter(Boolean).join(" ") || "Address";
+    case "Officer": return [n.first_name, n.last_name].filter(Boolean).join(" ") || "Officer";
+    case "Phone": return n.e164 || "Phone";
+    case "Exclusion": return "Exclusion";
+    case "Community": return "Community";
+    default: return n.item_type;
+  }
+}
+
+const typeColor = {
+  Provider: "#6ea8fe", Address: "#5fb0a3", Officer: "#e8b339",
+  Phone: "#9d7bd8", Exclusion: "#e05a5a", Community: "#4fc3f7",
+};
+
+if (document.getElementById("network")) {
+  const nodes = new vis.DataSet(neighborhood.nodes.map((n) => ({
+    id: n.ref,
+    label: labelFor(n),
+    title: n.item_type + (n.hop_distance === 0 ? " (this provider)" : ""),
+    color: { background: typeColor[n.item_type] || "#8b90a0", border: "#14161c" },
+    shape: n.hop_distance === 0 ? "star" : "dot",
+    size: n.hop_distance === 0 ? 24 : 13,
+    font: { color: "#e4e6eb", size: 12 },
+  })));
+  const edges = new vis.DataSet(neighborhood.edges.map((e) => ({
+    from: e.source, to: e.target, label: e.rel_type,
+    color: { color: "#3a4256", highlight: "#6ea8fe" },
+    font: { color: "#8b93a0", size: 9, strokeWidth: 0, align: "middle" },
+  })));
+  new vis.Network(document.getElementById("network"), { nodes, edges }, {
+    physics: { stabilization: { iterations: 150 }, barnesHut: { gravitationalConstant: -4000 } },
+    interaction: { hover: true },
+    edges: { smooth: { type: "continuous" } },
+  });
+}
+
 function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s;

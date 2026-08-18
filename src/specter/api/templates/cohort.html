@@ -15,18 +15,21 @@ in the template.</p>
   <div class="stat"><span class="n">{{ cohort.graph_counts.exclusion }}</span><span class="l">Exclusion nodes</span></div>
 </div>
 
+<h2>Screen a new provider, live</h2>
+<p class="note">Runs the real five-agent pipeline (entity resolution, graph investigation,
+enforcement intel, the Skeptic, the Case Reporter) against a real NPI, right now — real
+Azure calls, real cost. User-triggered only; nothing on this page fires it automatically.</p>
+<div class="panel">
+  <input type="text" id="screen-npi" placeholder="10-digit NPI, e.g. 1003001439" maxlength="10">
+  <p></p>
+  <button id="screen-btn" onclick="runScreening()">Screen this provider</button>
+  <div id="screen-result"></div>
+</div>
+
 <h2>Priority tier distribution</h2>
 <p class="note">{{ cohort.priority_tier_approximation_note }}
 ({{ cohort.cases_with_exact_priority_tier }}/{{ cohort.total_cases }} cases have an exact,
 persisted score — debt D-23.)</p>
-{% for tier in ["high_priority", "standard", "low"] %}
-<div class="bar-row">
-  <span>{{ tier }}</span>
-  <div class="bar-track"><div class="bar-fill {{ tier }}"
-    style="width: {{ (cohort.priority_tier_counts[tier] / max_tier_count * 100) if max_tier_count else 0 }}%"></div></div>
-  <span>{{ cohort.priority_tier_counts[tier] }}</span>
-</div>
-{% endfor %}
 {% if cohort.priority_tier_counts.high_priority == 0 %}
 <p class="note">Zero <code>high_priority</code> cases is a real, unaltered result
 (debt D-24): the escalation gate requires 3 of 4 independent signal families to
@@ -42,22 +45,19 @@ entity-match conflict, and fresh evidence. These cases met all four. This number
 never tuned to look better or worse — see <code>config/screening.yaml</code>'s
 <code>escalation_gate</code> block and the per-case drill-down for the real signals.</p>
 {% endif %}
+<div class="panel"><canvas id="tierChart" height="90"></canvas></div>
 
 <h2>Signal type distribution</h2>
-{% for signal_type, count in cohort.signal_type_counts.items() %}
-<div class="bar-row">
-  <span>{{ signal_type }}</span>
-  <div class="bar-track"><div class="bar-fill"
-    style="width: {{ (count / max_signal_count * 100) if max_signal_count else 0 }}%"></div></div>
-  <span>{{ count }}</span>
-</div>
-{% endfor %}
+<div class="panel"><canvas id="signalChart" height="140"></canvas></div>
 
 <h2>LLM call ledger</h2>
 <p class="note">Overall cache hit rate {{ "%.0f"|format(costs.overall_cache_hit_rate * 100) }}%
-across {{ costs.total_calls }} recorded calls. <code>cost_usd</code> is
-<code>-</code>, never <code>$0.00</code>, wherever real Foundry/Vertex pricing
-has not been filled in (debt D-8).</p>
+across {{ costs.total_calls }} recorded calls, spanning every session that has run a live
+agent against this ledger. <code>cost_usd</code> is <code>-</code>, never <code>$0.00</code>,
+wherever real Foundry/Vertex pricing has not been filled in (debt D-8).</p>
+{% if costs.calls_by_day and costs.calls_by_day|length > 1 %}
+<div class="panel"><canvas id="callsChart" height="90"></canvas></div>
+{% endif %}
 <table>
 <tr><th>Agent</th><th>Tier</th><th>Calls</th><th>Cache hit%</th><th>Cost (USD)</th></tr>
 {% for row in costs.rows %}
@@ -85,4 +85,131 @@ has not been filled in (debt D-8).</p>
 </tr>
 {% endfor %}
 </table>
+
+<script>
+const tierCounts = {{ cohort.priority_tier_counts | tojson }};
+const signalCounts = {{ cohort.signal_type_counts | tojson }};
+const callsByDay = {{ costs.calls_by_day | tojson }};
+
+const gridColor = "#2c3040";
+const textColor = "#8b90a0";
+Chart.defaults.color = textColor;
+Chart.defaults.borderColor = gridColor;
+Chart.defaults.font.family = "ui-monospace, 'SF Mono', Consolas, monospace";
+
+new Chart(document.getElementById("tierChart"), {
+  type: "bar",
+  data: {
+    labels: ["high_priority", "standard", "low"],
+    datasets: [{
+      data: [tierCounts.high_priority, tierCounts.standard, tierCounts.low],
+      backgroundColor: ["#e05a5a", "#e8b339", "#5fb0a3"],
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    indexAxis: "y",
+    plugins: { legend: { display: false } },
+    scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+const signalLabels = Object.keys(signalCounts);
+new Chart(document.getElementById("signalChart"), {
+  type: "bar",
+  data: {
+    labels: signalLabels,
+    datasets: [{
+      data: signalLabels.map((k) => signalCounts[k]),
+      backgroundColor: "#6ea8fe",
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    indexAxis: "y",
+    plugins: { legend: { display: false } },
+    scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+if (callsByDay.length > 1) {
+  new Chart(document.getElementById("callsChart"), {
+    data: {
+      labels: callsByDay.map((d) => d.day),
+      datasets: [
+        {
+          type: "bar",
+          label: "calls",
+          data: callsByDay.map((d) => d.calls),
+          backgroundColor: "#3a4256",
+          yAxisID: "y",
+        },
+        {
+          type: "line",
+          label: "cache hit rate",
+          data: callsByDay.map((d) => d.cache_hit_rate * 100),
+          borderColor: "#e8b339",
+          backgroundColor: "#e8b339",
+          tension: 0.25,
+          yAxisID: "y1",
+        },
+      ],
+    },
+    options: {
+      scales: {
+        y: { beginAtZero: true, position: "left", title: { display: true, text: "calls" } },
+        y1: {
+          beginAtZero: true, max: 100, position: "right",
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: "cache hit %" },
+        },
+      },
+    },
+  });
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+async function runScreening() {
+  const btn = document.getElementById("screen-btn");
+  const out = document.getElementById("screen-result");
+  const npi = document.getElementById("screen-npi").value.trim();
+  if (!/^\d{10}$/.test(npi)) {
+    out.innerHTML = '<p class="error">Enter a real 10-digit NPI.</p>';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Screening (real agent chain, ~30-90s)...";
+  out.innerHTML = "";
+  try {
+    const resp = await fetch("/screen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ npi: npi }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      out.innerHTML = '<p class="error">' + escapeHtml(data.detail || String(resp.status)) + "</p>";
+      return;
+    }
+    if (data.status === "rejected") {
+      out.innerHTML = '<p class="error">Rejected: ' + escapeHtml(data.rejection_reason) + "</p>";
+      return;
+    }
+    out.innerHTML =
+      '<p>Screened <code>' + escapeHtml(data.npi) + '</code> — tier ' +
+      '<span class="badge ' + data.priority_tier + '">' + data.priority_tier + "</span> — " +
+      '<a class="npi" href="/ui/cases/' + escapeHtml(data.npi) + '">view case</a>. Reload this page to see it in the tables above.</p>';
+  } catch (e) {
+    out.innerHTML = '<p class="error">' + escapeHtml(String(e)) + "</p>";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Screen this provider";
+  }
+}
+</script>
 {% endblock %}

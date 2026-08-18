@@ -6,7 +6,7 @@ expansion on a hub node returns the whole graph.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from neo4j import Driver
@@ -31,6 +31,35 @@ _ATTRIBUTE_KEY_PROP = {
     "phone": ("Phone", "e164"),
     "officer": ("Officer", "officer_id"),
 }
+
+# Per-label business key, same `graph:<type>:<key>` scheme
+# `evidence_tools.validate_citations` already resolves citations through —
+# reused here as the node identifier `expand_neighborhood` hands out, so a
+# graph-viz node id is always a real, resolvable citation, never a
+# Neo4j-internal id exposed as if it were a business identifier.
+_NODE_KEY_PROP = {
+    "Provider": "npi",
+    "Address": "normalized_key",
+    "Phone": "e164",
+    "Officer": "officer_id",
+    "Exclusion": "exclusion_id",
+    "Community": "community_id",
+    "Taxonomy": "code",
+    "EnforcementCase": "case_id",
+}
+
+
+def _node_ref(label: str, props: dict[str, Any]) -> str:
+    key_prop = _NODE_KEY_PROP.get(label)
+    key_value = props.get(key_prop) if key_prop else None
+    if key_value is None:
+        # A label this mapping doesn't know, or a node missing its own key
+        # property — still needs *a* stable id to draw an edge to, so fall
+        # back to the label alone rather than raising; this is a rendering
+        # correlation key, not a claimed citation (CLAUDE.md hard rule 3 is
+        # about identifiers presented as real-world facts, not this).
+        return f"graph:{label.lower()}:unknown"
+    return f"graph:{label.lower()}:{key_value}"
 
 
 def get_provider_profile(driver: Driver, npi: str) -> ProviderProfile | None:
@@ -72,24 +101,65 @@ def get_provider_profile(driver: Driver, npi: str) -> ProviderProfile | None:
 
 
 def expand_neighborhood(driver: Driver, npi: str, hops: int = 2, limit: int = 50) -> Subgraph:
+    """The provider itself plus every node reachable within `hops`
+    relationships, and the real edges between them — `edges` was silently
+    always `[]` until this fixed it; `tools/bindings.py`'s own docstring for
+    this tool already promised "plus the edges connecting them" to the
+    agent that calls it, so this was a real gap, not a deliberate omission.
+    Each node/edge endpoint is a `graph:<label>:<key>` ref, the same scheme
+    `evidence_tools.validate_citations` resolves — a rendering id that is
+    always a real, citable identifier, never a raw internal one.
+    """
     hops = min(hops, MAX_HOPS)
     limit = min(limit, MAX_LIMIT)
-    query = f"""
+    node_query = f"""
         MATCH (start:Provider {{npi: $npi}})
         MATCH path = (start)-[*1..{hops}]-(other)
-        WITH DISTINCT other, min(length(path)) AS hop_distance
+        WITH start, other, min(length(path)) AS hop_distance
         ORDER BY hop_distance
         LIMIT $limit
-        RETURN other, labels(other) AS node_labels, hop_distance
+        RETURN start, elementId(start) AS start_id,
+               other, labels(other) AS node_labels, hop_distance, elementId(other) AS element_id
     """
     with driver.session() as session:
-        records = session.run(query, npi=npi, limit=limit).data()
-    nodes = [
-        {"item_type": r["node_labels"][0] if r["node_labels"] else "unknown",
-         "hop_distance": r["hop_distance"], **dict(r["other"])}
-        for r in records
-    ]
-    return Subgraph(center_npi=npi, nodes=nodes, edges=[])
+        records = session.run(node_query, npi=npi, limit=limit).data()
+
+    nodes: list[dict[str, Any]] = []
+    element_id_to_ref: dict[str, str] = {}
+    if records:
+        element_id_to_ref[records[0]["start_id"]] = f"graph:provider:{npi}"
+    for r in records:
+        label = r["node_labels"][0] if r["node_labels"] else "Unknown"
+        props = dict(r["other"])
+        ref = _node_ref(label, props)
+        element_id_to_ref[r["element_id"]] = ref
+        nodes.append({"ref": ref, "item_type": label, "hop_distance": r["hop_distance"], **props})
+
+    edges: list[dict[str, Any]] = []
+    if element_id_to_ref:
+        # Scoped by the exact element ids the node query already found —
+        # never an unbounded scan of every relationship in the graph, which
+        # a naive `MATCH (a)-[r]-(b)` with no node filter would be against a
+        # graph carrying 119k+ Exclusion nodes.
+        edge_query = """
+            MATCH (a)-[r]-(b)
+            WHERE elementId(a) IN $ids AND elementId(b) IN $ids AND elementId(a) < elementId(b)
+            RETURN DISTINCT elementId(a) AS a_id, elementId(b) AS b_id, type(r) AS rel_type
+        """
+        with driver.session() as session:
+            edge_records = session.run(
+                edge_query, ids=list(element_id_to_ref)
+            ).data()
+        for r in edge_records:
+            edges.append(
+                {
+                    "source": element_id_to_ref[r["a_id"]],
+                    "target": element_id_to_ref[r["b_id"]],
+                    "rel_type": r["rel_type"],
+                }
+            )
+
+    return Subgraph(center_npi=npi, nodes=nodes, edges=edges)
 
 
 def find_shared_attribute_peers(

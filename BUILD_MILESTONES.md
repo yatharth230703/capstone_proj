@@ -280,6 +280,73 @@ that had gone stale the moment real data changed underneath it was caught
 and fixed in the same session, not left to rot. Full detail, including
 the exact signals/evidence for both cases, is in D-23/D-24's rows in §4.
 
+**Second post-M14 addendum (2026-08-19, operator-requested): real charts, a
+graph visualization, and a second write path — CLAUDE.md Amendment 4(a)
+updated.** The operator asked directly whether the dashboard had "live
+runs... graphs... live information" — honest answer at the time: no real
+charts (CSS bar rows only), no visualization of the graph itself despite
+the whole backend being a graph database, and no way to trigger a new
+screening run from the UI. All three built:
+
+- **Real charts (Chart.js, CDN, no build step).** Tier and signal-type
+  distributions on `/ui` are now real bar charts, not CSS width
+  percentages. `GET /costs` gained `calls_by_day` — a genuine historical
+  chart (calls + cache hit rate, bucketed by day from `data/ledger.sqlite`'s
+  own `ts` column) spanning every session that has run a live agent, not a
+  synthesized trend line: `2026-08-15` through `2026-08-18`, 269→23→48,374→
+  13,957 calls/day, 79%→42%→83%→91% cache hit rate.
+- **A real graph visualization, and a real pre-existing bug found fixing
+  it.** `tools/graph_tools.expand_neighborhood` **silently always returned
+  `edges: []`** — `tools/bindings.py`'s own docstring for the LLM-facing
+  tool already promised "plus the edges connecting them," but the
+  implementation never populated them. Fixed for real: nodes/edges now use
+  a `graph:<label>:<key>` ref (the same scheme `evidence_tools.
+  validate_citations` already resolves), edges scoped by `elementId` so the
+  query stays bounded regardless of the graph's 119k+ Exclusion nodes. New
+  `GET /graph/{npi}` (`api/graph.py`) filters out `Taxonomy` nodes for
+  *rendering* (thousands of unrelated providers share one DME code, pure
+  noise at hop=2) — and, caught live in the browser before shipping,
+  **also drops every node that filtering orphans**, not just the Taxonomy
+  node itself; the first version rendered ~40 disconnected floating dots
+  that looked like data but were structurally meaningless. `/ui/cases/
+  {npi}` renders the result with `vis-network` (CDN): dragging the actual
+  officer-sharing cluster into view turns "`officer_degree=4`" from a
+  narrative sentence into a literal star-and-satellite diagram with real
+  company names.
+- **`POST /screen` — the second write path.** Runs one operator-supplied
+  NPI through the exact same pipeline `scripts/40_screen.py` uses:
+  `workflow/screening.screen_provider`'s body was extracted into a
+  standalone `screen_one_provider(npi, *, driver, runtime, thresholds,
+  scoring_service, evidence_dir, cases_dir)` so the workflow node and the
+  new endpoint call the identical function, not two copies that could
+  drift. Re-verifies the Azure key live before starting (fails in ~1s, not
+  partway through a 5-agent chain), 404s on an unknown NPI before touching
+  the agent chain, and uses its own write-capable Neo4j driver — the
+  dashboard's shared driver stays read-only per CLAUDE.md's Neo4j
+  guardrails. **CLAUDE.md Amendment 4(a) updated same day**, same
+  discipline as the research endpoint's own addition: two write paths now,
+  independently conditioned, neither covered by the other's guardrails.
+  Live-verified two ways: `curl` got a clean `503` with the real Azure
+  failure reason (key was dead at test time — D-20's 7th flip), and the
+  same result reproduced end-to-end through the actual browser button,
+  including the button re-enabling itself afterward. The success path (a
+  real, billed multi-agent run) was not exercised automatically — same
+  "run by hand" convention `POST /research` already established; `tests/
+  test_api_graph_screen.py` covers routing, validation, and the dead-key
+  fail-loud path with a monkeypatched Azure check instead.
+
+Real regressions caught by the existing suite while building this, both
+fixed same-session: `api/cases.py`'s `*.json` glob also matched the new
+`*.score.json` files from the D-23 fix (crashed trying to parse a
+`CaseScore` as a `CasePacket`); and `test_cohort_page_real_corpus_
+renders_all_cases_linked`'s naive `href="/ui/cases/` substring count
+matched the new screening-trigger JS's own template string, not just real
+`<a>` tags — fixed by stripping `<script>` blocks before counting. `pytest
+tests/ -q` → 331 passed (324 + 7 new), same 4 pre-existing Azure-key-dead
+failures as every session this key has flipped on (D-20, now a 7th
+state change — dead again at this addendum's end, confirmed by a fresh
+`httpx` check, not assumed).
+
 **M11 in one line:** 244 screened-cohort addresses classified live — 173
 `commercial_medical`, 46 `commercial`, 24 `residential`, 2 `mailbox_store` —
 and `physical_existence` fires for all 30 providers at an implausible-type

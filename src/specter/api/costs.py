@@ -7,6 +7,7 @@ NULL (D-8 — no real Foundry/Vertex pricing filled in yet) — never coerced to
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,29 @@ router = APIRouter()
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 LEDGER_PATH = _REPO_ROOT / "data" / "ledger.sqlite"
+
+
+def _calls_by_day(db_path: Path) -> list[dict[str, Any]]:
+    """Real history, not a synthesized trend line — `ts` is recorded on
+    every ledger row already (`llm/ledger.py`), just never bucketed before.
+    Spans every session that has run a live agent against this ledger, not
+    just today's.
+    """
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT substr(ts, 1, 10) AS day, COUNT(*), SUM(prompt_tokens), SUM(cached_tokens)
+            FROM llm_calls GROUP BY day ORDER BY day
+            """
+        ).fetchall()
+    return [
+        {
+            "day": day,
+            "calls": calls,
+            "cache_hit_rate": (cached / prompt) if prompt else 0.0,
+        }
+        for day, calls, prompt, cached in rows
+    ]
 
 
 @router.get("/costs")
@@ -49,4 +73,5 @@ def costs() -> dict[str, Any]:
         "rows": rows,
         "overall_cache_hit_rate": ledger.cache_hit_rate(),
         "total_calls": ledger.total_calls(),
+        "calls_by_day": _calls_by_day(LEDGER_PATH),
     }

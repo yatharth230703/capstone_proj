@@ -367,22 +367,39 @@ server-rendered UI on top of it.
 
 Boundaries:
 
-- **Read-only, with exactly one exception.** The dashboard renders artifacts;
-  it does not screen, score, adjudicate, or mutate the graph. Anything else
-  that generates data belongs in a script, not in an HTTP handler.
+- **Read-only, with exactly two exceptions.** The dashboard renders
+  artifacts; it does not screen, score, adjudicate, or mutate the graph on
+  its own initiative. Anything else that generates data belongs in a
+  script, not in an HTTP handler.
 
-  **The exception, added 2026-08-18 at the operator's request: a
+  **Exception one, added 2026-08-18 at the operator's request: a
   grounded-research endpoint.** `agents/grounded_research.py` has had no live
   consumer since M4 (debt D-15), and the dashboard is the first natural one
   this project has ever had. A per-provider "run grounded research" endpoint
   may make a real Vertex call and write real `EvidenceArtifact`s. Conditions:
-  it is the *only* write path in the API; it is explicitly user-triggered,
-  never fired on page load or by a background poller; its cost is visible in
-  the ledger like every other call; and the citations it renders are the real
-  `grounding_metadata` URIs, with `NOTES_API_DEVIATIONS.md` D15's finding
-  (they are Google redirect links, not source-page URLs) disclosed in the UI
-  rather than papered over. Verified live 2026-08-18: the Vertex SA works and
-  a real run produced 12 citations.
+  it is explicitly user-triggered, never fired on page load or by a
+  background poller; its cost is visible in the ledger like every other
+  call; and the citations it renders are the real `grounding_metadata`
+  URIs, with `NOTES_API_DEVIATIONS.md` D15's finding (they are Google
+  redirect links, not source-page URLs) disclosed in the UI rather than
+  papered over. Verified live 2026-08-18: the Vertex SA works and a real
+  run produced 12 citations.
+
+  **Exception two, added 2026-08-19 at the operator's request: a
+  live single-provider screening endpoint.** `POST /screen` (`api/screen.py`)
+  runs `workflow.screening.screen_one_provider` — the *exact* per-provider
+  pipeline `scripts/40_screen.py` uses, extracted so the two callers can't
+  drift apart — against one operator-supplied NPI, real Azure calls, real
+  cost. Same conditions as exception one: user-triggered only (POST, no GET,
+  no poller); the Azure key is re-verified live before the pipeline starts,
+  same discipline as `scripts/40_screen.py`'s own `_confirm_azure_key_alive`,
+  so a dead key (D-20 — six flips and counting) fails in ~1s instead of
+  partway through a multi-agent chain; an unknown NPI 404s before touching
+  the agent chain rather than crashing inside it; and it writes through its
+  own write-capable Neo4j driver, never the dashboard's shared read-only
+  one. Two write paths now, not one — both independently conditioned, both
+  logged the same way, neither allowed to imply the other's guardrails
+  cover it.
 - **No new web dependency.** `fastapi` (0.141.1), `uvicorn` (0.52.1) and
   `jinja2` (3.1.6) are already installed transitively via
   `google-adk[mcp]` — confirmed 2026-08-18. Use them. A separate JS build
