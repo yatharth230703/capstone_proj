@@ -11,20 +11,27 @@ needs a real write (`update_legal_status_from_adjudications`, D-10).
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
 import httpx
+import structlog
 import yaml
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 
+from specter.obs.live_events import listen
 from specter.settings import Settings, get_settings
 from specter.tools.graph_tools import get_provider_profile
 from specter.tools.signal_tools import load_thresholds
 from specter.workflow.screening import screen_one_provider
 from specter.workflow.state import ScoringService
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
@@ -82,31 +89,66 @@ def _scoring_service() -> ScoringService:
 
 
 @router.post("/screen")
-async def run_screening(body: ScreenRequest, request: Request) -> dict[str, Any]:
+async def run_screening(body: ScreenRequest, request: Request) -> StreamingResponse:
+    """Streams the pipeline's real progress as it happens (Server-Sent
+    Events) instead of one JSON blob at the end — the dashboard's live
+    agent map (which agent is running, what tool it just called, whether
+    this was a prefix-cache hit) reads these events, sourced from
+    `obs/live_events.emit()` calls inside `workflow/screening.py` and
+    `agents/_llm_call.py` itself, not from anything invented here.
+
+    The 404/dead-key checks below still run *before* the stream starts, so
+    they still produce a normal HTTP status/JSON body — once
+    `StreamingResponse` begins, the status is already committed and errors
+    must instead become a `type: "error"` event.
+    """
     settings = get_settings()
     _confirm_azure_key_alive(settings)
 
     write_driver = GraphDatabase.driver(
         settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password.get_secret_value())
     )
-    try:
-        # A bad/unknown npi should 404, not crash deep inside the agent
-        # chain — cohort_select only ever hands screen_one_provider npis it
-        # already knows exist; a user-typed npi has no such guarantee.
-        if get_provider_profile(write_driver, body.npi) is None:
-            raise HTTPException(
-                status_code=404, detail=f"no provider with npi {body.npi} in the graph"
-            )
-
-        result = await screen_one_provider(
-            body.npi,
-            driver=write_driver,
-            runtime=request.app.state.runtime,
-            thresholds=load_thresholds(_CONFIG_PATH),
-            scoring_service=_scoring_service(),
-            evidence_dir=_EVIDENCE_DIR,
-            cases_dir=_CASES_DIR,
-        )
-    finally:
+    # A bad/unknown npi should 404, not crash deep inside the agent chain —
+    # cohort_select only ever hands screen_one_provider npis it already
+    # knows exist; a user-typed npi has no such guarantee.
+    if get_provider_profile(write_driver, body.npi) is None:
         write_driver.close()
-    return result
+        raise HTTPException(status_code=404, detail=f"no provider with npi {body.npi} in the graph")
+
+    events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _run() -> None:
+        try:
+            with listen(events.put_nowait):
+                result = await screen_one_provider(
+                    body.npi,
+                    driver=write_driver,
+                    runtime=request.app.state.runtime,
+                    thresholds=load_thresholds(_CONFIG_PATH),
+                    scoring_service=_scoring_service(),
+                    evidence_dir=_EVIDENCE_DIR,
+                    cases_dir=_CASES_DIR,
+                )
+            events.put_nowait({"type": "done", "result": result})
+        except Exception as exc:  # noqa: BLE001 — surfaced to the client, not swallowed
+            logger.exception("screening.live_run_failed", npi=body.npi)
+            events.put_nowait({"type": "error", "detail": str(exc)})
+        finally:
+            write_driver.close()
+            events.put_nowait(None)
+
+    async def _sse() -> Any:
+        task = asyncio.create_task(_run())
+        try:
+            while True:
+                event = await events.get()
+                if event is None:
+                    break
+                # `default=str` only guards tool-call args of a shape this SDK
+                # hasn't been seen returning — never applied to a screening
+                # result field, which is already plain JSON via `model_dump`.
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        finally:
+            await task
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")

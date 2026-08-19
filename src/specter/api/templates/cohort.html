@@ -18,12 +18,26 @@ in the template.</p>
 <h2>Screen a new provider, live</h2>
 <p class="note">Runs the real five-agent pipeline (entity resolution, graph investigation,
 enforcement intel, the Skeptic, the Case Reporter) against a real NPI, right now — real
-Azure calls, real cost. User-triggered only; nothing on this page fires it automatically.</p>
+Azure calls, real cost. User-triggered only; nothing on this page fires it automatically.
+The map below streams the pipeline's actual progress (Server-Sent Events from
+<code>POST /screen</code>) as it runs — every box, tool call, and cache-hit/miss line is a
+real event emitted from inside the agent chain, not a canned animation.</p>
 <div class="panel">
   <input type="text" id="screen-npi" placeholder="10-digit NPI, e.g. 1003001439" maxlength="10">
   <p></p>
   <button id="screen-btn" onclick="runScreening()">Screen this provider</button>
   <div id="screen-result"></div>
+</div>
+<div class="panel">
+  <div class="agent-map" id="agent-map"></div>
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--border)"></span>pending</span>
+    <span><span class="swatch" style="background:var(--accent)"></span>active</span>
+    <span><span class="swatch" style="background:var(--low)"></span>done</span>
+    <span><span class="swatch" style="background:var(--high)"></span>rejected</span>
+    <span>dashed border = deterministic code, not an LLM agent (CLAUDE.md hard rule 8)</span>
+  </div>
+  <div class="live-log" id="live-log"></div>
 </div>
 
 <h2>Priority tier distribution</h2>
@@ -232,6 +246,76 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+// Mirrors the real pipeline order in `workflow/screening.py::screen_one_provider` —
+// "code" stages are deterministic (CLAUDE.md hard rule 8: scoring is never an agent).
+const AGENT_STAGES = [
+  { key: "entity_resolution", label: "Entity Resolution", kind: "agent" },
+  { key: "graph_investigation", label: "Graph Investigation", kind: "agent" },
+  { key: "enforcement_intel", label: "Enforcement Intel", kind: "agent" },
+  { key: "skeptic", label: "Skeptic", kind: "agent" },
+  { key: "scoring", label: "Scoring", kind: "code" },
+  { key: "case_reporter", label: "Case Reporter", kind: "agent" },
+  { key: "graph_write", label: "Graph Write", kind: "code" },
+];
+
+function resetAgentMap() {
+  const map = document.getElementById("agent-map");
+  map.innerHTML = AGENT_STAGES.map((s, i) => (
+    (i > 0 ? '<span class="agent-map-arrow">&#8594;</span>' : "") +
+    '<div class="agent-node' + (s.kind === "code" ? " code" : "") + '" id="node-' + s.key + '">' +
+    '<span class="agent-node-dot"></span><span class="agent-node-label">' + s.label + '</span>' +
+    '<div class="agent-node-sub" id="node-' + s.key + '-sub"></div></div>'
+  )).join("");
+  document.getElementById("live-log").innerHTML = "";
+}
+
+function setNodeStatus(key, status) {
+  const node = document.getElementById("node-" + key);
+  if (!node) return;
+  node.classList.remove("active", "done", "rejected");
+  node.classList.add(status);
+}
+
+function logLine(html) {
+  const log = document.getElementById("live-log");
+  const line = document.createElement("div");
+  line.className = "live-log-entry";
+  line.innerHTML = html;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function handleLiveEvent(ev) {
+  if (ev.type === "stage") {
+    if (ev.status === "started") {
+      setNodeStatus(ev.stage, "active");
+      logLine('<span class="stage-tag">' + escapeHtml(ev.stage) + "</span> started");
+    } else if (ev.status === "completed") {
+      setNodeStatus(ev.stage, "done");
+      const extra = Object.keys(ev).filter((k) => !["type", "stage", "status"].includes(k))
+        .map((k) => k + "=" + JSON.stringify(ev[k])).join(" ");
+      logLine('<span class="stage-tag">' + escapeHtml(ev.stage) + "</span> completed " + escapeHtml(extra));
+    } else if (ev.status === "rejected") {
+      setNodeStatus(ev.stage, "rejected");
+      logLine('<span class="stage-tag error">' + escapeHtml(ev.stage) + "</span> rejected — " + escapeHtml(ev.reason));
+    }
+  } else if (ev.type === "llm_call") {
+    const sub = ev.status === "cache_hit" ? "L1 cache hit"
+      : ev.status === "started" ? "calling " + ev.model + " (" + ev.tier + ")"
+      : ev.latency_ms + "ms, " + ev.cache_layer + "-cache, " + ev.prompt_tokens + "/" + ev.cached_tokens + "/" + ev.completion_tokens + " tok";
+    const subEl = document.getElementById("node-" + ev.agent + "-sub");
+    if (subEl) subEl.textContent = sub;
+    logLine('<span class="agent-tag">' + escapeHtml(ev.agent) + "</span> " + escapeHtml(sub));
+  } else if (ev.type === "tool_call") {
+    logLine('<span class="agent-tag">' + escapeHtml(ev.agent) + '</span> &#8594; tool <code>' +
+      escapeHtml(ev.tool) + "</code>(" + escapeHtml(JSON.stringify(ev.args)) + ")");
+  } else if (ev.type === "tool_result") {
+    logLine('<span class="agent-tag">' + escapeHtml(ev.agent) + '</span> &#8592; <code>' + escapeHtml(ev.tool) + "</code> returned");
+  } else if (ev.type === "error") {
+    logLine('<span class="stage-tag error">error</span> ' + escapeHtml(ev.detail));
+  }
+}
+
 async function runScreening() {
   const btn = document.getElementById("screen-btn");
   const out = document.getElementById("screen-result");
@@ -243,25 +327,45 @@ async function runScreening() {
   btn.disabled = true;
   btn.textContent = "Screening (real agent chain, ~30-90s)...";
   out.innerHTML = "";
+  resetAgentMap();
   try {
     const resp = await fetch("/screen", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ npi: npi }),
     });
-    const data = await resp.json();
-    if (!resp.ok) {
+    if (!resp.ok || !resp.body) {
+      const data = await resp.json().catch(() => ({}));
       out.innerHTML = '<p class="error">' + escapeHtml(data.detail || String(resp.status)) + "</p>";
       return;
     }
-    if (data.status === "rejected") {
-      out.innerHTML = '<p class="error">Rejected: ' + escapeHtml(data.rejection_reason) + "</p>";
-      return;
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!frame.startsWith("data: ")) continue;
+        const ev = JSON.parse(frame.slice(6));
+        handleLiveEvent(ev);
+        if (ev.type === "done") {
+          const data = ev.result;
+          out.innerHTML = data.status === "rejected"
+            ? '<p class="error">Rejected: ' + escapeHtml(data.rejection_reason) + "</p>"
+            : '<p>Screened <code>' + escapeHtml(data.npi) + '</code> — tier ' +
+              '<span class="badge ' + data.priority_tier + '">' + data.priority_tier + "</span> — " +
+              '<a class="npi" href="/ui/cases/' + escapeHtml(data.npi) + '">view case</a>. ' +
+              "Reload this page to see it in the tables above.</p>";
+        } else if (ev.type === "error") {
+          out.innerHTML = '<p class="error">' + escapeHtml(ev.detail) + "</p>";
+        }
+      }
     }
-    out.innerHTML =
-      '<p>Screened <code>' + escapeHtml(data.npi) + '</code> — tier ' +
-      '<span class="badge ' + data.priority_tier + '">' + data.priority_tier + "</span> — " +
-      '<a class="npi" href="/ui/cases/' + escapeHtml(data.npi) + '">view case</a>. Reload this page to see it in the tables above.</p>';
   } catch (e) {
     out.innerHTML = '<p class="error">' + escapeHtml(String(e)) + "</p>";
   } finally {
@@ -269,5 +373,7 @@ async function runScreening() {
     btn.textContent = "Screen this provider";
   }
 }
+
+resetAgentMap();
 </script>
 {% endblock %}

@@ -66,6 +66,7 @@ from specter.core.contracts import ScreeningThresholds
 from specter.core.enums import Verdict
 from specter.core.errors import SpecterError
 from specter.graph.enforcement_loader import update_legal_status_from_adjudications
+from specter.obs.live_events import emit
 from specter.workflow.state import ScoringService, build_candidate_pairs, cohort_select
 
 logger = structlog.get_logger(__name__)
@@ -97,20 +98,56 @@ async def screen_one_provider(
     provider — CLAUDE.md hard rule 1/6/9 catches) is caught and turned into
     a `status="rejected"` result; anything else propagates, per hard rule 7.
     """
+    stage = "entity_resolution"
     try:
+        emit({"type": "stage", "stage": stage, "status": "started"})
         pairs = build_candidate_pairs(driver, [npi])
         entity_adjudications: list[dict[str, Any]] = []
         for _, candidate_npi in pairs:
             result = await adjudicate(driver, npi, candidate_npi, thresholds, evidence_dir, runtime)
             entity_adjudications.append(result.output)
+        emit(
+            {
+                "type": "stage",
+                "stage": stage,
+                "status": "completed",
+                "candidate_pair_count": len(pairs),
+            }
+        )
 
+        stage = "graph_investigation"
+        emit({"type": "stage", "stage": stage, "status": "started"})
         graph_result = await investigate(driver, npi, thresholds, evidence_dir, runtime)
-        enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
+        emit(
+            {
+                "type": "stage",
+                "stage": stage,
+                "status": "completed",
+                "signal_count": len(graph_result.output["signals"]),
+            }
+        )
 
+        stage = "enforcement_intel"
+        emit({"type": "stage", "stage": stage, "status": "started"})
+        enforcement_result = await extract(driver, npi, thresholds, evidence_dir, runtime)
+        emit({"type": "stage", "stage": stage, "status": "completed"})
+
+        stage = "skeptic"
+        emit({"type": "stage", "stage": stage, "status": "started"})
         counter_result = await challenge(
             npi, graph_result.output, enforcement_result.output, runtime
         )
+        emit(
+            {
+                "type": "stage",
+                "stage": stage,
+                "status": "completed",
+                "confidence_adjustment": counter_result.output["confidence_adjustment"],
+            }
+        )
 
+        stage = "scoring"
+        emit({"type": "stage", "stage": stage, "status": "started"})
         case_score = scoring_service.score(
             npi,
             graph_result.output["signals"],
@@ -118,7 +155,17 @@ async def screen_one_provider(
             entity_adjudications,
             counter_result.output["confidence_adjustment"],
         )
+        emit(
+            {
+                "type": "stage",
+                "stage": stage,
+                "status": "completed",
+                "priority_tier": case_score.priority_tier.value,
+            }
+        )
 
+        stage = "case_reporter"
+        emit({"type": "stage", "stage": stage, "status": "started"})
         case_packet = await synthesize(
             npi,
             graph_result.output,
@@ -128,14 +175,20 @@ async def screen_one_provider(
             evidence_dir,
             runtime,
         )
+        emit({"type": "stage", "stage": stage, "status": "completed"})
+
+        stage = "graph_write"
+        emit({"type": "stage", "stage": stage, "status": "started"})
         # D-10 (BUILD_MILESTONES.md): the graph node, not just the case
         # packet, should carry the agent's real adjudicated legal_status
         # once one exists — see graph/enforcement_loader.py's docstring.
         update_legal_status_from_adjudications(driver, case_packet.legal_status_per_match)
+        emit({"type": "stage", "stage": stage, "status": "completed"})
     except SpecterError as exc:
         # Visible, not silent: logged loudly and present in the caller's own
         # summary output, labelled `rejected` — see this module's docstring.
         logger.warning("screening.provider_rejected", npi=npi, reason=str(exc))
+        emit({"type": "stage", "stage": stage, "status": "rejected", "reason": str(exc)})
         return {"npi": npi, "status": "rejected", "rejection_reason": str(exc)}
 
     cases_dir.mkdir(parents=True, exist_ok=True)

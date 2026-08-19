@@ -34,6 +34,7 @@ from specter.core.contracts import (
 from specter.core.enums import CacheLayer
 from specter.llm.ledger import compute_cost
 from specter.llm.response_cache import make_cache_key
+from specter.obs.live_events import emit
 
 if TYPE_CHECKING:
     from specter.agents._base import AgentRuntime
@@ -96,6 +97,17 @@ async def _invoke(
 
     cached = runtime.cache.get(cache_key)
     if cached is not None:
+        emit(
+            {
+                "type": "llm_call",
+                "agent": agent.name,
+                "task_class": task_class,
+                "tier": tier.name,
+                "model": tier.model,
+                "status": "cache_hit",
+                "cache_layer": "L1",
+            }
+        )
         runtime.ledger.record(
             LlmCallRecord(
                 ts=datetime.now(UTC),
@@ -135,6 +147,16 @@ async def _invoke(
             parsed,
         )
 
+    emit(
+        {
+            "type": "llm_call",
+            "agent": agent.name,
+            "task_class": task_class,
+            "tier": tier.name,
+            "model": tier.model,
+            "status": "started",
+        }
+    )
     session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
     started = time.perf_counter()
     final_text: str | None = None
@@ -153,6 +175,24 @@ async def _invoke(
             session_id=session.id,
             new_message=types.Content(role="user", parts=[types.Part(text=compiled.user)]),
         ):
+            for part in (event.content.parts if event.content else None) or []:
+                if part.function_call is not None:
+                    emit(
+                        {
+                            "type": "tool_call",
+                            "agent": agent.name,
+                            "tool": part.function_call.name,
+                            "args": part.function_call.args or {},
+                        }
+                    )
+                if part.function_response is not None:
+                    emit(
+                        {
+                            "type": "tool_result",
+                            "agent": agent.name,
+                            "tool": part.function_response.name,
+                        }
+                    )
             # `is_final_response()` is true once per participating agent, not
             # once per invocation — keep the last rather than breaking early.
             text = _final_text(event)
@@ -212,6 +252,21 @@ async def _invoke(
             cache_layer=CacheLayer.NONE,
             escalated=escalated,
         )
+    )
+    emit(
+        {
+            "type": "llm_call",
+            "agent": agent.name,
+            "task_class": task_class,
+            "tier": tier.name,
+            "model": tier.model,
+            "status": "completed",
+            "latency_ms": round(latency_ms, 1),
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "completion_tokens": completion_tokens,
+            "cache_layer": "prefix" if cached_tokens else "none",
+        }
     )
     logger.info(
         "agent.completed",

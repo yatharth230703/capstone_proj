@@ -88,6 +88,37 @@ function renderMarkdown(el, text) {
   }
   .legend .swatch.star { border-radius: 2px; transform: rotate(45deg); }
   #node-info { min-height: 1.3rem; }
+  .agent-map { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.25rem; }
+  .agent-node {
+    flex: 1 1 8rem; min-width: 8rem; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.5rem 0.6rem; background: #10121a; transition: border-color 0.2s, background 0.2s;
+  }
+  .agent-node.code { border-style: dashed; }
+  .agent-node-dot {
+    width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--border);
+    display: inline-block; margin-right: 0.4rem;
+  }
+  .agent-node.active { border-color: var(--accent); background: #16233a; }
+  .agent-node.active .agent-node-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .agent-node.done { border-color: var(--low); }
+  .agent-node.done .agent-node-dot { background: var(--low); }
+  .agent-node.rejected { border-color: var(--high); }
+  .agent-node.rejected .agent-node-dot { background: var(--high); }
+  .agent-node-label { font-weight: 600; font-size: 0.82rem; }
+  .agent-node-sub { color: var(--muted); font-size: 0.72rem; margin-top: 0.3rem; min-height: 1.6em; }
+  .agent-map-arrow { align-self: center; color: var(--muted); flex: 0 0 auto; padding: 0 0.1rem; }
+  .live-log {
+    margin-top: 0.75rem; max-height: 16rem; overflow-y: auto; background: #10121a;
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem;
+    font-size: 0.78rem; line-height: 1.7;
+  }
+  .live-log-entry { border-bottom: 1px dotted var(--border); padding: 0.1rem 0; }
+  .live-log-entry:last-child { border-bottom: none; }
+  .stage-tag, .agent-tag {
+    display: inline-block; background: var(--border); color: var(--text); border-radius: 3px;
+    padding: 0 0.35rem; margin-right: 0.35rem; font-size: 0.72rem;
+  }
+  .stage-tag.error { background: var(--high); color: #1a0d0d; }
 </style>
 </head>
 <body>
