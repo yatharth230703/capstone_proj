@@ -50,6 +50,64 @@ never tuned to look better or worse — see <code>config/screening.yaml</code>'s
 <h2>Signal type distribution</h2>
 <div class="panel"><canvas id="signalChart" height="140"></canvas></div>
 
+<h2>Clinic locations</h2>
+<p class="note">{{ cohort.clinic_locations.points | length }} of {{ cohort.total_cases }} providers
+plotted by ZCTA centroid (<code>geocoding_method: {{ cohort.clinic_locations.geocoding_method }}</code>)
+— coordinates are offline/free (CLAUDE.md Amendment 3), rendered on a real basemap via Google Maps
+JavaScript API. Centroid precision only, not street-level.
+{% if cohort.clinic_locations.unmatched_count %}{{ cohort.clinic_locations.unmatched_count }}
+provider(s) excluded: no ZCTA match for their ZIP (PO-box-only or military ZIPs have none).{% endif %}</p>
+{% if not google_maps_api_key %}
+<p class="note error">GOOGLE_MAPS_API_KEY is not configured — no map rendered.</p>
+{% elif cohort.clinic_locations.points %}
+<div class="panel"><div id="clinicMap" style="height: 420px;"></div></div>
+<script>
+const clinicPoints = {{ cohort.clinic_locations.points | tojson }};
+const clinicTierColor = { high_priority: "#e05a5a", standard: "#e8b339", low: "#5fb0a3" };
+function initClinicMap() {
+  const el = document.getElementById("clinicMap");
+  const map = new google.maps.Map(el, {
+    center: { lat: 39, lng: -98 },
+    zoom: 4,
+    mapTypeControl: false,
+    streetViewControl: false,
+  });
+  const bounds = new google.maps.LatLngBounds();
+  const infoWindow = new google.maps.InfoWindow();
+  clinicPoints.forEach((p) => {
+    const position = { lat: p.lat, lng: p.lon };
+    const marker = new google.maps.Marker({
+      position,
+      map,
+      title: p.organization_name || p.npi,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        fillColor: clinicTierColor[p.priority_tier] || "#6ea8fe",
+        fillOpacity: 0.9,
+        strokeColor: "#14161c",
+        strokeWeight: 1,
+        scale: 6,
+      },
+    });
+    marker.addListener("click", () => {
+      infoWindow.setContent(
+        "<div style=\"font: 13px ui-monospace, monospace; color: #14161c;\">" +
+        "<strong>" + (p.organization_name || p.npi) + "</strong><br>" +
+        [p.city, p.state].filter(Boolean).join(", ") + "<br>" +
+        "tier: " + p.priority_tier + "</div>"
+      );
+      infoWindow.open(map, marker);
+    });
+    bounds.extend(position);
+  });
+  map.fitBounds(bounds);
+}
+</script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initClinicMap&v=weekly" async></script>
+{% else %}
+<p class="note">No plottable clinic locations.</p>
+{% endif %}
+
 <h2>LLM call ledger</h2>
 <p class="note">Overall cache hit rate {{ "%.0f"|format(costs.overall_cache_hit_rate * 100) }}%
 across {{ costs.total_calls }} recorded calls, spanning every session that has run a live

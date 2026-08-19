@@ -12,13 +12,28 @@
 addresses, officers, phones, and exclusion proximity, the same graph the signal
 detectors read. Drag nodes to rearrange; hover an edge for its relationship type.</p>
 {% if neighborhood.found and neighborhood.nodes|length > 1 %}
-<div class="panel"><div id="network" style="height: 420px;"></div></div>
+<div class="legend">
+  <span><span class="swatch star" style="background:#6ea8fe"></span>this provider</span>
+  <span><span class="swatch" style="background:#6ea8fe"></span>Provider</span>
+  <span><span class="swatch" style="background:#5fb0a3"></span>Address</span>
+  <span><span class="swatch" style="background:#e8b339"></span>Officer</span>
+  <span><span class="swatch" style="background:#9d7bd8"></span>Phone</span>
+  <span><span class="swatch" style="background:#e05a5a"></span>Exclusion</span>
+  <span><span class="swatch" style="background:#4fc3f7"></span>Community</span>
+</div>
+<p class="note">Click a node to show its label below the graph — labels stay
+off the canvas by default so a dense neighborhood doesn't collide into
+unreadable text.</p>
+<div class="panel">
+  <div id="network" style="height: 420px;"></div>
+  <p class="note" id="node-info">Click a node for details.</p>
+</div>
 {% else %}
 <p class="note">No neighborhood data (provider has no graph connections beyond itself).</p>
 {% endif %}
 
 <h2>Narrative</h2>
-<pre>{{ detail.case.narrative }}</pre>
+<div class="panel markdown-body" id="narrative"></div>
 
 <h2>Fired signals ({{ detail.case.signals | length }})</h2>
 {% if detail.case.signals %}
@@ -117,7 +132,6 @@ const typeColor = {
 if (document.getElementById("network")) {
   const nodes = new vis.DataSet(neighborhood.nodes.map((n) => ({
     id: n.ref,
-    label: labelFor(n),
     title: n.item_type + (n.hop_distance === 0 ? " (this provider)" : ""),
     color: { background: typeColor[n.item_type] || "#8b90a0", border: "#14161c" },
     shape: n.hop_distance === 0 ? "star" : "dot",
@@ -129,12 +143,21 @@ if (document.getElementById("network")) {
     color: { color: "#3a4256", highlight: "#6ea8fe" },
     font: { color: "#8b93a0", size: 9, strokeWidth: 0, align: "middle" },
   })));
-  new vis.Network(document.getElementById("network"), { nodes, edges }, {
+  const network = new vis.Network(document.getElementById("network"), { nodes, edges }, {
     physics: { stabilization: { iterations: 150 }, barnesHut: { gravitationalConstant: -4000 } },
     interaction: { hover: true },
     edges: { smooth: { type: "continuous" } },
   });
+  const byRef = Object.fromEntries(neighborhood.nodes.map((n) => [n.ref, n]));
+  network.on("click", (params) => {
+    const info = document.getElementById("node-info");
+    if (!params.nodes.length) { info.textContent = "Click a node for details."; return; }
+    const n = byRef[params.nodes[0]];
+    info.textContent = n.item_type + ": " + labelFor(n) + (n.hop_distance === 0 ? " (this provider)" : "");
+  });
 }
+
+renderMarkdown(document.getElementById("narrative"), {{ detail.case.narrative | tojson }});
 
 function escapeHtml(s) {
   const div = document.createElement('div');
@@ -160,18 +183,21 @@ async function runResearch() {
       out.innerHTML = '<p class="error">' + escapeHtml(data.detail || String(resp.status)) + '</p>';
       return;
     }
-    let html = '<h3>Narrative</h3><pre>' + escapeHtml(data.narrative) + '</pre>';
+    let html = '<h3>Narrative</h3><div class="panel markdown-body" id="research-narrative"></div>';
     html += '<h3>Citations (' + data.citations.length + ')</h3>';
     html += '<p class="note">' + escapeHtml(data.citation_disclosure) + '</p>';
     if (data.citations.length) {
       html += '<ul>';
       for (const c of data.citations) {
-        html += '<li><code>' + escapeHtml(c.artifact_id.slice(0, 16)) + '...</code> stored at '
-          + escapeHtml(c.stored_path) + '</li>';
+        const label = c.title || c.url || c.artifact_id.slice(0, 16) + '...';
+        html += '<li>' + (c.url
+          ? '<a href="' + escapeHtml(c.url) + '" target="_blank" rel="noopener">' + escapeHtml(label) + '</a>'
+          : escapeHtml(label)) + '</li>';
       }
       html += '</ul>';
     }
     out.innerHTML = html;
+    renderMarkdown(document.getElementById('research-narrative'), data.narrative);
   } catch (e) {
     out.innerHTML = '<p class="error">' + escapeHtml(String(e)) + '</p>';
   } finally {

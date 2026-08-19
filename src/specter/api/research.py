@@ -24,6 +24,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from specter.agents.grounded_research import build_grounded_research_agent, research_topic
+from specter.core.contracts import EvidenceArtifact
 from specter.settings import get_settings
 
 router = APIRouter()
@@ -43,6 +44,17 @@ class ResearchRequest(BaseModel):
     query: str = Field(min_length=1)
 
 
+def _citation_view(artifact: EvidenceArtifact) -> dict[str, Any]:
+    """Adds the human-facing `title`/`url` the dashboard links to.
+    `grounded_research.research_topic` stores each citation's content as
+    `"{title}\\n{uri}"` (the chunk's site title plus its grounding-redirect
+    URL) — read back here rather than duplicating that write, so the API
+    and the stored artifact can never drift apart.
+    """
+    title, _, url = artifact.stored_path.read_text(encoding="utf-8").partition("\n")
+    return {**artifact.model_dump(mode="json"), "title": title.strip(), "url": url.strip()}
+
+
 @router.post("/research")
 async def run_grounded_research(body: ResearchRequest, request: Request) -> dict[str, Any]:
     settings = get_settings()
@@ -60,6 +72,6 @@ async def run_grounded_research(body: ResearchRequest, request: Request) -> dict
         "query": result.query,
         "model": result.model,
         "narrative": result.narrative,
-        "citations": [c.model_dump(mode="json") for c in result.citations],
+        "citations": [_citation_view(c) for c in result.citations],
         "citation_disclosure": _CITATION_DISCLOSURE,
     }

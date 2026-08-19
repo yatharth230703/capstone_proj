@@ -32,6 +32,7 @@ from neo4j import Driver
 from specter.api.ml import score_or_error
 from specter.core.contracts import CasePacket, CaseScore
 from specter.core.errors import SpecterError
+from specter.tools.entity_tools import zip_centroid
 from specter.workflow.state import ScoringService
 
 router = APIRouter()
@@ -131,6 +132,56 @@ def _graph_counts(driver: Driver) -> dict[str, int]:
     return counts
 
 
+def _clinic_locations(
+    driver: Driver, npi_to_tier: dict[str, str]
+) -> dict[str, Any]:
+    """Cohort clinic locations for the dashboard map, offline and free
+    (CLAUDE.md Amendment 3): one address per provider, geocoded to its
+    ZCTA centroid via the committed Census reference table — never a live
+    Maps lookup. A ZIP with no ZCTA match (PO-box-only, military) is
+    reported as excluded, not silently dropped from the count.
+    """
+    with driver.session() as session:
+        records = session.run(
+            """
+            MATCH (p:Provider)-[:LOCATED_AT]->(a:Address)
+            WHERE p.npi IN $npis
+            WITH p, a ORDER BY a.zip5
+            WITH p, collect(a)[0] AS a
+            RETURN p.npi AS npi, p.organization_name AS organization_name,
+                   a.city AS city, a.state AS state, a.zip5 AS zip5
+            """,
+            npis=list(npi_to_tier),
+        )
+        rows = [dict(r) for r in records]
+
+    points: list[dict[str, Any]] = []
+    unmatched = 0
+    for row in rows:
+        centroid = zip_centroid(row["zip5"]) if row["zip5"] else None
+        if centroid is None:
+            unmatched += 1
+            continue
+        lat, lon = centroid
+        points.append(
+            {
+                "npi": row["npi"],
+                "organization_name": row["organization_name"],
+                "city": row["city"],
+                "state": row["state"],
+                "lat": lat,
+                "lon": lon,
+                "priority_tier": npi_to_tier[row["npi"]],
+            }
+        )
+    return {
+        "points": points,
+        "unmatched_count": unmatched,
+        "geocoding_method": "zcta_centroid",
+        "known_limitations": ["centroid_precision_only", "not_street_level"],
+    }
+
+
 @router.get("/cohort")
 def cohort_overview(request: Request) -> dict[str, Any]:
     """`cases` (added building M14 — the Action Plan's own File Manifest
@@ -168,9 +219,11 @@ def cohort_overview(request: Request) -> dict[str, Any]:
             }
         )
     cases.sort(key=lambda c: (-c["signal_count"], c["npi"]))
+    npi_to_tier = {c["npi"]: c["priority_tier"] for c in cases}
 
     return {
         "total_cases": len(paths),
+        "clinic_locations": _clinic_locations(request.app.state.driver, npi_to_tier),
         "cases_with_fired_signals": cases_with_fired_signals,
         "signal_type_counts": signal_type_counts,
         "priority_tier_counts": tier_counts,

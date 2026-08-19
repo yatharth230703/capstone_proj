@@ -31,6 +31,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
 from specter.api import cases, costs, graph, judge
+from specter.settings import get_settings
 
 router = APIRouter()
 _templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
@@ -60,8 +61,18 @@ def root() -> RedirectResponse:
 def cohort_page(request: Request) -> HTMLResponse:
     cohort = cases.cohort_overview(request)
     cost_data = costs.costs()
+    maps_key = get_settings().google_maps_api_key
     return _templates.TemplateResponse(
-        request, "cohort.html", {"cohort": cohort, "costs": cost_data}
+        request,
+        "cohort.html",
+        {
+            "cohort": cohort,
+            "costs": cost_data,
+            # Maps JS keys are meant to run client-side (browser-restricted,
+            # not secret) — this is the one place `SecretStr` is deliberately
+            # unwrapped rather than kept server-side.
+            "google_maps_api_key": maps_key.get_secret_value() if maps_key else None,
+        },
     )
 
 

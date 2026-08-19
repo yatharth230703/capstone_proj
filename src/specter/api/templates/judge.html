@@ -5,6 +5,12 @@
 <div class="limitation">{{ judge.limitation_block }}</div>
 {% for title, body in judge.sections.items() %}
 <h2>{{ title }}</h2>
-<pre>{{ body }}</pre>
+<div class="panel markdown-body" id="section-{{ loop.index }}"></div>
 {% endfor %}
+<script>
+const sections = {{ judge.sections | tojson }};
+Object.values(sections).forEach((body, i) => {
+  renderMarkdown(document.getElementById("section-" + (i + 1)), body);
+});
+</script>
 {% endblock %}

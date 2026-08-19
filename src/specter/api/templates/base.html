@@ -6,6 +6,13 @@
 <title>{% block title %}Specter{% endblock %} — Specter</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script>
+function renderMarkdown(el, text) {
+  el.innerHTML = DOMPurify.sanitize(marked.parse(text || ""));
+}
+</script>
 <style>
   :root {
     color-scheme: dark;
@@ -64,6 +71,23 @@
   input[type=text] { width: 100%; padding: 0.4rem 0.6rem; background: #10121a;
     border: 1px solid var(--border); border-radius: 4px; color: var(--text); font: inherit; }
   .error { color: var(--high); }
+  .markdown-body { line-height: 1.6; }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+    border: none; margin: 1rem 0 0.4rem; padding: 0; font-size: 0.95rem;
+  }
+  .markdown-body p { margin: 0.5rem 0; }
+  .markdown-body ul, .markdown-body ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+  .markdown-body li { margin: 0.15rem 0; }
+  .markdown-body code { background: #10121a; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  .markdown-body strong { color: #fff; }
+  .markdown-body a { color: var(--accent); }
+  .legend { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--muted); }
+  .legend .swatch {
+    display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%;
+    margin-right: 0.35rem; vertical-align: -1px;
+  }
+  .legend .swatch.star { border-radius: 2px; transform: rotate(45deg); }
+  #node-info { min-height: 1.3rem; }
 </style>
 </head>
 <body>
